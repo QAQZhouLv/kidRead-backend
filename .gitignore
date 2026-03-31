@@ -13,3 +13,7 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# TTS file
+static/tts/
+static/tts_meta/
