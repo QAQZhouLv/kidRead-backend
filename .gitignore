@@ -15,5 +15,8 @@ venv/
 .idea/
 
 # TTS file
-static/tts/
-static/tts_meta/
+static/
+
+#脚本文件
+migrate_20260401.py
+backfill_story_covers.py

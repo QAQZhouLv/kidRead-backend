@@ -30,6 +30,12 @@ class StorySessionOut(BaseModel):
     summary: Optional[str] = None
     draft_content: str
     status: str
+
+    is_pinned: bool
+    pinned_at: Optional[datetime] = None
+    title_source: str
+    is_auto_titled: bool
+
     created_at: datetime
     updated_at: datetime
 

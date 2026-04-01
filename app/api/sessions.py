@@ -17,6 +17,8 @@ from app.services.session_service import (
     rename_session,
     delete_session,
     clear_session_draft,
+    pin_session,
+    unpin_session,
 )
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -56,11 +58,7 @@ def get_session_api(session_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{session_id}/draft", response_model=StorySessionOut)
-def update_session_draft_api(
-    session_id: str,
-    data: StorySessionUpdateDraft,
-    db: Session = Depends(get_db),
-):
+def update_session_draft_api(session_id: str, data: StorySessionUpdateDraft, db: Session = Depends(get_db)):
     session = update_session_draft(db, session_id, data.draft_content)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -68,12 +66,24 @@ def update_session_draft_api(
 
 
 @router.put("/{session_id}/rename", response_model=StorySessionOut)
-def rename_session_api(
-    session_id: str,
-    data: StorySessionRename,
-    db: Session = Depends(get_db),
-):
+def rename_session_api(session_id: str, data: StorySessionRename, db: Session = Depends(get_db)):
     session = rename_session(db, session_id, data.title)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@router.post("/{session_id}/pin", response_model=StorySessionOut)
+def pin_session_api(session_id: str, db: Session = Depends(get_db)):
+    session = pin_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@router.post("/{session_id}/unpin", response_model=StorySessionOut)
+def unpin_session_api(session_id: str, db: Session = Depends(get_db)):
+    session = unpin_session(db, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

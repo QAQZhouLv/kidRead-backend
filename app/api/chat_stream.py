@@ -13,6 +13,7 @@ from app.services.message_service import (
     create_assistant_message,
     create_user_message,
 )
+from app.services.session_service import auto_title_session_if_needed
 
 router = APIRouter(tags=["chat-stream"])
 
@@ -20,7 +21,6 @@ router = APIRouter(tags=["chat-stream"])
 @router.websocket("/ws/chat/stream")
 async def chat_stream(websocket: WebSocket):
     await websocket.accept()
-
     db = SessionLocal()
 
     async def emit(payload):
@@ -33,7 +33,6 @@ async def chat_stream(websocket: WebSocket):
 
             req = ChatRequest(**data)
 
-            # 1. 先存 user message
             create_user_message(
                 db,
                 StoryMessageCreateUser(
@@ -45,10 +44,8 @@ async def chat_stream(websocket: WebSocket):
                 )
             )
 
-            # 2. 真流式生成
             result = await run_story_stream(req, emit)
 
-            # 3. 最后存 assistant message
             create_assistant_message(
                 db,
                 StoryMessageCreateAssistant(
@@ -62,6 +59,13 @@ async def chat_stream(websocket: WebSocket):
                     choices=result.choices,
                     should_save=result.should_save,
                 )
+            )
+
+            auto_title_session_if_needed(
+                db=db,
+                session_id=req.session_id,
+                user_text=req.text,
+                assistant_text=f"{result.lead_text}\n{result.story_text}\n{result.guide_text}"
             )
 
     except WebSocketDisconnect:
