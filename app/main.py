@@ -22,6 +22,8 @@ from app.api.chat_stream import router as chat_stream_router
 from app.api.tts import router as tts_router
 from app.api.openings import router as openings_router
 
+from app.api.app_config import router as app_config_router
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title=APP_NAME)
@@ -85,3 +87,4 @@ app.include_router(messages_router)
 app.include_router(chat_stream_router)
 app.include_router(tts_router)
 app.include_router(openings_router)
+app.include_router(app_config_router)
