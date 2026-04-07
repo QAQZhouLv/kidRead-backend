@@ -4,7 +4,7 @@ __pycache__/
 *.pyo
 
 # 虚拟环境
-venv/
+.venv/
 .env
 
 # 数据库
@@ -20,3 +20,4 @@ static/
 #脚本文件
 migrate_20260401.py
 backfill_story_covers.py
+migrate_20260402_soft_delete.py

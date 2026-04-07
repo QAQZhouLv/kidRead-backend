@@ -1,10 +1,19 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.story import Story
+from app.schemas.story import StoryCreate, StoryAppendRequest
+from app.services.story_service import (
+    create_story as service_create_story,
+    get_story as service_get_story,
+    append_story_content,
+)
+from app.services.cover_service import finalize_story_assets
 
 router = APIRouter(prefix="/api/stories", tags=["stories"])
 
@@ -77,8 +86,55 @@ def get_story(
     return story_to_dict(story)
 
 
+@router.post("")
+def create_story_api(
+    data: StoryCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    content = (data.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
+
+    story = service_create_story(db, data)
+
+    # 后台继续做：正式标题 + fallback 封面重做 + AI 封面
+    background_tasks.add_task(finalize_story_assets, story.id)
+
+    return story_to_dict(story)
+
+
+@router.post("/{story_id}/append")
+def append_story_api(
+    story_id: int,
+    data: StoryAppendRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    story_text = (data.story_text or "").strip()
+    if not story_text:
+        raise HTTPException(status_code=400, detail="story_text cannot be empty")
+
+    story = service_get_story(db, story_id)
+    if not story or story.is_deleted:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    story = append_story_content(db, story_id, story_text)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    # 续写后也允许重新整理标题/封面
+    background_tasks.add_task(finalize_story_assets, story.id)
+
+    return story_to_dict(story)
+
+
 @router.patch("/{story_id}/rename")
-def rename_story(story_id: int, payload: StoryRenameRequest, db: Session = Depends(get_db)):
+def rename_story(
+    story_id: int,
+    payload: StoryRenameRequest,
+    db: Session = Depends(get_db)
+):
     story = (
         db.query(Story)
         .filter(Story.id == story_id, Story.is_deleted == False)
@@ -92,7 +148,9 @@ def rename_story(story_id: int, payload: StoryRenameRequest, db: Session = Depen
         raise HTTPException(status_code=400, detail="Title cannot be empty")
 
     story.title = new_title
+    story.title_source = "manual"
     story.updated_at = datetime.utcnow()
+
     db.commit()
     db.refresh(story)
 
@@ -104,7 +162,11 @@ def rename_story(story_id: int, payload: StoryRenameRequest, db: Session = Depen
 
 
 @router.patch("/{story_id}/favorite")
-def update_story_favorite(story_id: int, payload: StoryFavoriteRequest, db: Session = Depends(get_db)):
+def update_story_favorite(
+    story_id: int,
+    payload: StoryFavoriteRequest,
+    db: Session = Depends(get_db)
+):
     story = (
         db.query(Story)
         .filter(Story.id == story_id, Story.is_deleted == False)
@@ -115,6 +177,7 @@ def update_story_favorite(story_id: int, payload: StoryFavoriteRequest, db: Sess
 
     story.is_favorite = bool(payload.is_favorite)
     story.updated_at = datetime.utcnow()
+
     db.commit()
     db.refresh(story)
 
@@ -138,6 +201,7 @@ def soft_delete_story(story_id: int, db: Session = Depends(get_db)):
     story.is_deleted = True
     story.deleted_at = datetime.utcnow()
     story.updated_at = datetime.utcnow()
+
     db.commit()
     db.refresh(story)
 
