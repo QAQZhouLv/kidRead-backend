@@ -20,11 +20,17 @@ TTS_META_DIR = TTS_DIR.parent / "tts_meta"
 TTS_META_DIR.mkdir(parents=True, exist_ok=True)
 
 _SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+[。！？!?；;\n]?", re.UNICODE)
+_SPEAKABLE_RE = re.compile(r'[\s"“”‘’《》〈〉「」『』【】（）()<>、，,。！？!?；;：:\-—…·~]+')
 
 
 def _build_cache_key(text: str, voice: str, rate: str) -> str:
     raw = f"{voice}|{rate}|{text}".encode("utf-8")
     return hashlib.md5(raw).hexdigest()
+
+
+def _has_speakable_content(text: str) -> bool:
+    cleaned = _SPEAKABLE_RE.sub("", str(text or ""))
+    return bool(cleaned.strip())
 
 
 def split_text_to_sentences(text: str) -> list[str]:
@@ -47,7 +53,6 @@ def _to_seconds(value: Any) -> float:
     except Exception:
         return 0.0
 
-    # edge-tts 通常返回 100ns tick；若本来就是秒则直接返回
     if value > 1000:
         return value / 10_000_000.0
     return value
@@ -117,19 +122,20 @@ def _estimate_timelines_by_length(sentences: list[str], total_duration: float) -
     cursor = 0.0
     result = []
     for idx, sentence in enumerate(sentences):
-        if idx == len(sentences) - 1:
-            end = safe_total
-        else:
-            end = cursor + safe_total * (weights[idx] / all_weight)
-        result.append(
-            {
-                "index": idx,
-                "text": sentence,
-                "start": round(cursor, 3),
-                "end": round(max(end, cursor + 0.05), 3),
-            }
-        )
-        cursor = end
+      if idx == len(sentences) - 1:
+          end = safe_total
+      else:
+          end = cursor + safe_total * (weights[idx] / all_weight)
+
+      result.append(
+          {
+              "index": idx,
+              "text": sentence,
+              "start": round(cursor, 3),
+              "end": round(max(end, cursor + 0.05), 3),
+          }
+      )
+      cursor = end
 
     if result:
         result[-1]["end"] = round(max(result[-1]["end"], safe_total), 3)
@@ -209,6 +215,9 @@ async def synthesize_text_to_file(text: str, voice: str = "zh-CN-XiaoxiaoNeural"
     clean_text = (text or "").strip()
     if not clean_text:
         raise ValueError("text 不能为空")
+
+    if not _has_speakable_content(clean_text):
+        raise ValueError("text 没有可朗读内容")
 
     if edge_tts is None:
         raise RuntimeError(f"edge-tts 未安装: {EDGE_TTS_IMPORT_ERROR}")
