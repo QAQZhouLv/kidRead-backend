@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
 
 IntentType = Literal[
     "create_story",
@@ -10,13 +10,15 @@ IntentType = Literal[
     "end_chat",
 ]
 
+
 class HistoryMessage(BaseModel):
     role: str
     text: Optional[str] = None
     lead_text: Optional[str] = None
     story_text: Optional[str] = None
     guide_text: Optional[str] = None
-    choices: List[str] = []
+    choices: List[str] = Field(default_factory=list)
+
 
 class ChatRequest(BaseModel):
     scene: Literal["create", "bookchat"]
@@ -25,10 +27,16 @@ class ChatRequest(BaseModel):
     age: int
     input_mode: Literal["text", "voice", "choice"] = "text"
     text: str
-    history: List[HistoryMessage] = []
+    history: List[HistoryMessage] = Field(default_factory=list)
 
     current_story_content: str = ""
     session_draft_content: str = ""
+
+    # 后端自动补的结构化上下文
+    story_spec: Optional[dict[str, Any]] = None
+    story_state: Optional[dict[str, Any]] = None
+    story_summary: Optional[dict[str, Any]] = None
+
 
 class ChatResponse(BaseModel):
     intent: IntentType

@@ -6,9 +6,11 @@ from app.agent.runner import (
     build_history_text,
     call_tool_by_intent,
     fill_default_choices,
+    evaluate_and_maybe_rewrite,
 )
 from app.agent.tools import classify_intent_tool
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.services.rule_service import normalize_age_group
 
 
 OPEN_TAGS = {
@@ -30,9 +32,6 @@ MAX_CLOSE_TAG_LEN = max(len(v) for v in CLOSE_TAGS.values())
 
 
 def extract_chunk_text(chunk: Any) -> str:
-    """
-    尽量从 LangChain / OpenAI-compatible 的 chunk 中提取文本。
-    """
     if chunk is None:
         return ""
 
@@ -60,6 +59,9 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
     history_block = build_history_text(req)
     current_story = (req.current_story_content or "").strip()
     draft_story = (req.session_draft_content or "").strip()
+    story_spec = req.story_spec or {}
+    story_state = req.story_state or {}
+    story_summary = req.story_summary or {}
 
     system = f"""
 你是儿童故事共创助手。
@@ -82,22 +84,21 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
 </META>
 
 硬性要求：
-1. 内容适合 {req.age} 岁儿童。
+1. 内容适合 {req.age} 岁儿童，年龄档为 {normalize_age_group(req.age)}。
 2. 语言温和、具体、易理解。
 3. 必须保持角色、称呼、设定、情节前后连贯。
-4. lead 只写承接用户这句话的回应，要有回应感，不能总是泛泛地说“好呀我们继续”。
+4. lead 只写承接用户这句话的回应，要有回应感，不能空泛。
 5. story 只能写故事正文，不能把解释、提示、选项写进 story。
 6. guide 只负责自然引导下一步。
 7. META 中只能有这三个字段：
    - choices: 2~4 个短选项
    - should_save: true / false
    - save_mode: 固定为 "append"
-8. 当前 intent 是：{intent}
-9. ask_about_story、unsafety、end_chat 时，<STORY></STORY> 必须为空。
-10. end_chat 时不要继续讲新故事，只做礼貌收尾。
+8. ask_about_story、unsafety、end_chat 时，<STORY></STORY> 必须为空。
+9. end_chat 时不要继续讲新故事，只做礼貌收尾。
+10. 如果是 bookchat，优先依据 story_spec、story_state、story_summary、当前正式正文和本次会话草稿；历史记录只作补充参考。
 11. 绝对不要输出任何标签以外的额外文字。
 12. 所有标签必须闭合。
-13. 如果是 bookchat 续写，优先依据“当前正式正文”和“本次会话草稿”，历史记录只作补充参考。
 
 当前 scene：{req.scene}
 当前 intent：{intent}
@@ -106,6 +107,15 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
     user = f"""
 【用户本轮输入】
 {req.text}
+
+【story_spec（静态设定）】
+{story_spec}
+
+【story_state（动态剧情台账）】
+{story_state}
+
+【story_summary（压缩摘要）】
+{story_summary}
 
 【当前正式正文（最高优先级）】
 {current_story if current_story else "无"}
@@ -157,35 +167,28 @@ def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
 class TagStreamParser:
     def __init__(self, emit):
         self.emit = emit
-
         self.buffer = ""
         self.current_section: Optional[str] = None
-
         self.lead_text = ""
         self.story_text = ""
         self.guide_text = ""
         self.meta_text = ""
-
         self.started_sections = set()
 
     async def feed(self, text: str):
         if not text:
             return
-
         self.buffer += text
         await self._drain()
 
     async def finalize(self):
-        # 把剩余 buffer 尽量处理掉
         await self._drain(final=True)
 
     async def _drain(self, final: bool = False):
         while True:
             if self.current_section is None:
                 matched = self._find_next_open_tag()
-
                 if matched is None:
-                    # 没有找到完整开始标签，保留一点尾巴防止标签跨 chunk
                     keep = MAX_OPEN_TAG_LEN - 1
                     if final:
                         self.buffer = ""
@@ -194,22 +197,13 @@ class TagStreamParser:
                     return
 
                 prefix, tag_text, section = matched
-                # 丢掉标签前的无效前缀
                 self.buffer = self.buffer[len(prefix):]
-                # 再丢掉开始标签本身
                 self.buffer = self.buffer[len(tag_text):]
-
                 self.current_section = section
 
                 if section in ("lead", "story", "guide") and section not in self.started_sections:
                     self.started_sections.add(section)
-
-                    #print(f"\n[section_start] {section}", flush=True)   测试输出用的
-                    await self.emit({
-                        "type": "section_start",
-                        "section": section,
-                    })
-
+                    await self.emit({"type": "section_start", "section": section})
                 continue
 
             close_tag = CLOSE_TAGS[self.current_section]
@@ -223,9 +217,7 @@ class TagStreamParser:
                 self.current_section = None
                 continue
 
-            # 没找到完整闭合标签
             keep = len(close_tag) - 1
-
             if final:
                 content = self.buffer
                 if content:
@@ -240,7 +232,6 @@ class TagStreamParser:
                 if safe_text:
                     await self._append_and_emit(self.current_section, safe_text)
                 continue
-
             return
 
     def _find_next_open_tag(self):
@@ -266,33 +257,18 @@ class TagStreamParser:
             return
 
         if section == "lead":
-            #测试print(f"[lead] {text}", end="", flush=True)     
             self.lead_text += text
-            await self.emit({
-                "type": "section_delta",
-                "section": "lead",
-                "delta": text,
-            })
+            await self.emit({"type": "section_delta", "section": "lead", "delta": text})
             return
 
         if section == "story":
-            #print(f"[story] {text}", end="", flush=True)   
             self.story_text += text
-            await self.emit({
-                "type": "section_delta",
-                "section": "story",
-                "delta": text,
-            })
+            await self.emit({"type": "section_delta", "section": "story", "delta": text})
             return
 
         if section == "guide":
-            #测试print(f"[guide] {text}", end="", flush=True)    
             self.guide_text += text
-            await self.emit({
-                "type": "section_delta",
-                "section": "guide",
-                "delta": text,
-            })
+            await self.emit({"type": "section_delta", "section": "guide", "delta": text})
             return
 
         if section == "meta":
@@ -301,14 +277,6 @@ class TagStreamParser:
 
 
 async def run_story_stream(req: ChatRequest, emit):
-    """
-    真流式主链路：
-    1) 先快速判 intent
-    2) 再让模型按标签协议流式输出
-    3) 解析 lead/story/guide
-    4) 最后发 meta + done
-    5) 返回完整 ChatResponse 供入库
-    """
     intent = classify_intent_tool.invoke({
         "scene": req.scene,
         "user_text": req.text,
@@ -329,36 +297,43 @@ async def run_story_stream(req: ChatRequest, emit):
     ]):
         delta_text = extract_chunk_text(chunk)
         if delta_text:
-            #print(delta_text, end="", flush=True)    原始流式输出, 测试用到
             await parser.feed(delta_text)
 
     await parser.finalize()
 
     meta = normalize_stream_meta(parser.meta_text, intent)
 
-    # 对几个特殊 intent 做最后兜底
-    story_text = parser.story_text
-    if intent in ("ask_about_story", "unsafety", "end_chat"):
-        story_text = ""
-        meta["should_save"] = False
-
-    await emit({
-        "type": "meta",
-        "choices": meta["choices"],
-        "should_save": meta["should_save"],
-        "save_mode": meta["save_mode"],
-    })
-
-    await emit({
-        "type": "done",
-    })
-
-    return ChatResponse(
+    result = ChatResponse(
         intent=intent,
         lead_text=parser.lead_text.strip(),
-        story_text=story_text.strip(),
+        story_text=parser.story_text.strip(),
         guide_text=parser.guide_text.strip(),
         choices=meta["choices"],
         should_save=meta["should_save"],
         save_mode=meta["save_mode"],
     )
+
+    result, guard = evaluate_and_maybe_rewrite(req, result)
+    if guard is not None:
+        object.__setattr__(result, "_guard_result", guard)
+
+    if result.story_text != parser.story_text.strip():
+        await emit({
+            "type": "section_replace",
+            "section": "story",
+            "content": result.story_text,
+        })
+
+    if intent in ("ask_about_story", "unsafety", "end_chat"):
+        result.story_text = ""
+        result.should_save = False
+
+    await emit({
+        "type": "meta",
+        "choices": result.choices,
+        "should_save": result.should_save,
+        "save_mode": result.save_mode,
+    })
+
+    await emit({"type": "done"})
+    return result

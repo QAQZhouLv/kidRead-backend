@@ -12,6 +12,10 @@ from app.services.message_service import (
     create_user_message,
     create_assistant_message,
 )
+from app.services.chat_context_service import (
+    enrich_chat_request_from_db,
+    update_session_context_snapshot,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -38,6 +42,7 @@ def unified_chat(req: ChatRequest, db: Session = Depends(get_db)):
             )
         )
 
+        snapshot = enrich_chat_request_from_db(db, req)
         result = generate_chat_response(req)
 
         create_assistant_message(
@@ -54,6 +59,9 @@ def unified_chat(req: ChatRequest, db: Session = Depends(get_db)):
                 should_save=result.should_save,
             )
         )
+
+        guard_result = getattr(result, "_guard_result", None)
+        update_session_context_snapshot(db, req.session_id, snapshot, guard_result)
 
         return result
 

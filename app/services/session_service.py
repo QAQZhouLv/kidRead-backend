@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.story_session import StorySession
@@ -17,6 +18,8 @@ def create_session(db: Session, data: StorySessionCreate) -> StorySession:
         is_pinned=False,
         title_source="default",
         is_auto_titled=False,
+        context_snapshot=None,
+        last_guard_result=None,
     )
     db.add(session)
     db.commit()
@@ -108,6 +111,21 @@ def clear_session_draft(db: Session, session_id: str):
 
     session.draft_content = ""
     session.status = "merged"
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def update_session_context(db: Session, session_id: str, snapshot: dict | None = None, guard_result: dict | None = None):
+    session = get_session_by_session_id(db, session_id)
+    if not session:
+        return None
+
+    if snapshot is not None:
+        session.context_snapshot = json.dumps(snapshot, ensure_ascii=False)
+    if guard_result is not None:
+        session.last_guard_result = json.dumps(guard_result, ensure_ascii=False)
+
     db.commit()
     db.refresh(session)
     return session

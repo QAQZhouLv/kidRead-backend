@@ -41,8 +41,16 @@ def story_to_dict(story: Story):
         "age": story.age,
         "summary": story.summary,
         "content": story.content,
+        "story_spec": story.story_spec,
+        "story_state": story.story_state,
+        "story_summary": story.story_summary,
+        "target_age": story.target_age,
+        "difficulty_level": story.difficulty_level,
+        "safety_status": story.safety_status,
+        "safety_tags": story.safety_tags,
         "cover_image_url": story.cover_image_url,
         "fallback_cover_url": story.fallback_cover_url,
+        "display_cover_url": story.cover_image_url or story.fallback_cover_url,
         "cover_status": story.cover_status,
         "cover_prompt": story.cover_prompt,
         "title_source": story.title_source,
@@ -97,10 +105,7 @@ def create_story_api(
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
     story = service_create_story(db, data)
-
-    # 后台继续做：正式标题 + fallback 封面重做 + AI 封面
     background_tasks.add_task(finalize_story_assets, story.id)
-
     return story_to_dict(story)
 
 
@@ -123,9 +128,7 @@ def append_story_api(
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
 
-    # 续写后也允许重新整理标题/封面
     background_tasks.add_task(finalize_story_assets, story.id)
-
     return story_to_dict(story)
 
 

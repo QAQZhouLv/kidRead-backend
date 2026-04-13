@@ -12,6 +12,17 @@ class Story(Base):
     summary = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
 
+    # 三层故事上下文
+    story_spec = Column(Text, nullable=True)        # JSON string
+    story_state = Column(Text, nullable=True)       # JSON string
+    story_summary = Column(Text, nullable=True)     # JSON string
+
+    # 分级与安全
+    target_age = Column(String(20), nullable=True)         # 3-5 / 6-8 / 9-12
+    difficulty_level = Column(String(20), nullable=True)   # L1 / L2 / L3
+    safety_status = Column(String(20), nullable=False, default="passed")
+    safety_tags = Column(Text, nullable=True)              # JSON string
+
     cover_image_url = Column(String(500), nullable=True)
     fallback_cover_url = Column(String(500), nullable=True)
     cover_status = Column(String(50), nullable=False, default="fallback")

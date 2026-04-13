@@ -14,6 +14,10 @@ from app.services.message_service import (
     create_user_message,
 )
 from app.services.session_service import auto_title_session_if_needed
+from app.services.chat_context_service import (
+    enrich_chat_request_from_db,
+    update_session_context_snapshot,
+)
 
 router = APIRouter(tags=["chat-stream"])
 
@@ -44,6 +48,7 @@ async def chat_stream(websocket: WebSocket):
                 )
             )
 
+            snapshot = enrich_chat_request_from_db(db, req)
             result = await run_story_stream(req, emit)
 
             create_assistant_message(
@@ -61,11 +66,18 @@ async def chat_stream(websocket: WebSocket):
                 )
             )
 
+            update_session_context_snapshot(
+                db,
+                req.session_id,
+                snapshot,
+                getattr(result, "_guard_result", None),
+            )
+
             auto_title_session_if_needed(
                 db=db,
                 session_id=req.session_id,
                 user_text=req.text,
-                assistant_text=f"{result.lead_text}\n{result.story_text}\n{result.guide_text}"
+                assistant_text=f"{result.lead_text}\n{result.story_text}\n{result.guide_text}",
             )
 
     except WebSocketDisconnect:

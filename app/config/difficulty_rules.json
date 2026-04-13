@@ -1,0 +1,14 @@
+{
+  "L1": {
+    "avg_sentence_len_max": 14,
+    "new_word_ratio_max": 0.08
+  },
+  "L2": {
+    "avg_sentence_len_max": 22,
+    "new_word_ratio_max": 0.15
+  },
+  "L3": {
+    "avg_sentence_len_max": 30,
+    "new_word_ratio_max": 0.22
+  }
+}

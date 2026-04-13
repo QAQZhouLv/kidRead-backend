@@ -1,0 +1,64 @@
+{
+  "3-5": {
+    "max_sentence_len": 18,
+    "max_paragraphs": 3,
+    "max_character_count": 3,
+    "vocab_level": "very_simple",
+    "allowed_themes": [
+      "亲情",
+      "友情",
+      "日常探索",
+      "小动物"
+    ],
+    "forbidden_themes": [
+      "死亡",
+      "流血",
+      "绑架",
+      "恐怖惊吓",
+      "自伤"
+    ],
+    "tone": "warm",
+    "question_style": "direct"
+  },
+  "6-8": {
+    "max_sentence_len": 26,
+    "max_paragraphs": 5,
+    "max_character_count": 5,
+    "vocab_level": "simple",
+    "allowed_themes": [
+      "勇气",
+      "友情",
+      "成长",
+      "冒险",
+      "探索"
+    ],
+    "forbidden_themes": [
+      "血腥暴力",
+      "自伤",
+      "仇恨报复",
+      "极端恐怖"
+    ],
+    "tone": "gentle",
+    "question_style": "guided"
+  },
+  "9-12": {
+    "max_sentence_len": 34,
+    "max_paragraphs": 7,
+    "max_character_count": 7,
+    "vocab_level": "medium",
+    "allowed_themes": [
+      "成长",
+      "责任",
+      "探索",
+      "合作",
+      "解决问题"
+    ],
+    "forbidden_themes": [
+      "性相关内容",
+      "自伤",
+      "极端恐怖"
+    ],
+    "tone": "natural",
+    "question_style": "open"
+  }
+}

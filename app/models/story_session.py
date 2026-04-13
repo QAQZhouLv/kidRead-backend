@@ -22,5 +22,9 @@ class StorySession(Base):
     title_source = Column(String(50), nullable=False, default="default")  # default / auto / manual
     is_auto_titled = Column(Boolean, nullable=False, default=False)
 
+    # 调试与上下文快照
+    context_snapshot = Column(Text, nullable=True)
+    last_guard_result = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

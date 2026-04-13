@@ -35,6 +35,8 @@ class StorySessionOut(BaseModel):
     pinned_at: Optional[datetime] = None
     title_source: str
     is_auto_titled: bool
+    context_snapshot: Optional[str] = None
+    last_guard_result: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime
