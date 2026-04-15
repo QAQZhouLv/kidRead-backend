@@ -1,21 +1,19 @@
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.db.session import SessionLocal
 from app.models.story import Story
-from app.schemas.story import StoryCreate, StoryAppendRequest
-from app.services.story_service import (
-    create_story as service_create_story,
-    get_story as service_get_story,
-    append_story_content,
-)
+from app.models.user import User
+from app.schemas.story import StoryAppendRequest, StoryCreate
 from app.services.cover_service import finalize_story_assets
+from app.services.story_service import append_story_content, create_story as service_create_story, get_story as service_get_story
 
 router = APIRouter(prefix="/api/stories", tags=["stories"])
+
 
 
 def get_db():
@@ -34,23 +32,17 @@ class StoryFavoriteRequest(BaseModel):
     is_favorite: bool
 
 
+
 def story_to_dict(story: Story):
     return {
         "id": story.id,
+        "user_id": story.user_id,
         "title": story.title,
         "age": story.age,
         "summary": story.summary,
         "content": story.content,
-        "story_spec": story.story_spec,
-        "story_state": story.story_state,
-        "story_summary": story.story_summary,
-        "target_age": story.target_age,
-        "difficulty_level": story.difficulty_level,
-        "safety_status": story.safety_status,
-        "safety_tags": story.safety_tags,
         "cover_image_url": story.cover_image_url,
         "fallback_cover_url": story.fallback_cover_url,
-        "display_cover_url": story.cover_image_url or story.fallback_cover_url,
         "cover_status": story.cover_status,
         "cover_prompt": story.cover_prompt,
         "title_source": story.title_source,
@@ -62,12 +54,21 @@ def story_to_dict(story: Story):
     }
 
 
+
+def get_current_user_dep(
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+) -> User:
+    return get_current_user(db=db, authorization=authorization)
+
+
 @router.get("")
 def list_stories(
     include_deleted: bool = Query(False),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
-    query = db.query(Story)
+    query = db.query(Story).filter(Story.user_id == current_user.id)
 
     if not include_deleted:
         query = query.filter(Story.is_deleted == False)
@@ -80,9 +81,13 @@ def list_stories(
 def get_story(
     story_id: int,
     include_deleted: bool = Query(False),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
-    query = db.query(Story).filter(Story.id == story_id)
+    query = db.query(Story).filter(
+        Story.id == story_id,
+        Story.user_id == current_user.id,
+    )
 
     if not include_deleted:
         query = query.filter(Story.is_deleted == False)
@@ -98,13 +103,15 @@ def get_story(
 def create_story_api(
     data: StoryCreate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
     content = (data.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
-    story = service_create_story(db, data)
+    story = service_create_story(db, data, user_id=current_user.id)
+
     background_tasks.add_task(finalize_story_assets, story.id)
     return story_to_dict(story)
 
@@ -114,17 +121,18 @@ def append_story_api(
     story_id: int,
     data: StoryAppendRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
     story_text = (data.story_text or "").strip()
     if not story_text:
         raise HTTPException(status_code=400, detail="story_text cannot be empty")
 
-    story = service_get_story(db, story_id)
+    story = service_get_story(db, story_id, user_id=current_user.id)
     if not story or story.is_deleted:
         raise HTTPException(status_code=404, detail="Story not found")
 
-    story = append_story_content(db, story_id, story_text)
+    story = append_story_content(db, story_id, story_text, user_id=current_user.id)
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
 
@@ -136,11 +144,16 @@ def append_story_api(
 def rename_story(
     story_id: int,
     payload: StoryRenameRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
     story = (
         db.query(Story)
-        .filter(Story.id == story_id, Story.is_deleted == False)
+        .filter(
+            Story.id == story_id,
+            Story.user_id == current_user.id,
+            Story.is_deleted == False,
+        )
         .first()
     )
     if not story:
@@ -157,22 +170,23 @@ def rename_story(
     db.commit()
     db.refresh(story)
 
-    return {
-        "ok": True,
-        "id": story.id,
-        "title": story.title,
-    }
+    return {"ok": True, "id": story.id, "title": story.title}
 
 
 @router.patch("/{story_id}/favorite")
 def update_story_favorite(
     story_id: int,
     payload: StoryFavoriteRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
 ):
     story = (
         db.query(Story)
-        .filter(Story.id == story_id, Story.is_deleted == False)
+        .filter(
+            Story.id == story_id,
+            Story.user_id == current_user.id,
+            Story.is_deleted == False,
+        )
         .first()
     )
     if not story:
@@ -184,18 +198,22 @@ def update_story_favorite(
     db.commit()
     db.refresh(story)
 
-    return {
-        "ok": True,
-        "id": story.id,
-        "is_favorite": bool(story.is_favorite),
-    }
+    return {"ok": True, "id": story.id, "is_favorite": bool(story.is_favorite)}
 
 
 @router.delete("/{story_id}")
-def soft_delete_story(story_id: int, db: Session = Depends(get_db)):
+def soft_delete_story(
+    story_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dep),
+):
     story = (
         db.query(Story)
-        .filter(Story.id == story_id, Story.is_deleted == False)
+        .filter(
+            Story.id == story_id,
+            Story.user_id == current_user.id,
+            Story.is_deleted == False,
+        )
         .first()
     )
     if not story:

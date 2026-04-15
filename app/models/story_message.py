@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+
 from app.db.base import Base
 
 
@@ -7,6 +9,7 @@ class StoryMessage(Base):
     __tablename__ = "story_messages"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True, default=0)
 
     scene = Column(String(50), nullable=False, index=True, default="bookchat")
     story_id = Column(Integer, nullable=False, index=True, default=0)

@@ -1,14 +1,15 @@
 import json
+
 from sqlalchemy.orm import Session
+
 from app.models.story_message import StoryMessage
-from app.schemas.message import (
-    StoryMessageCreateUser,
-    StoryMessageCreateAssistant,
-)
+from app.schemas.message import StoryMessageCreateAssistant, StoryMessageCreateUser
 
 
-def create_user_message(db: Session, data: StoryMessageCreateUser) -> StoryMessage:
+
+def create_user_message(db: Session, data: StoryMessageCreateUser, *, user_id: int) -> StoryMessage:
     msg = StoryMessage(
+        user_id=user_id,
         scene=data.scene,
         story_id=data.story_id,
         session_id=data.session_id,
@@ -22,8 +23,10 @@ def create_user_message(db: Session, data: StoryMessageCreateUser) -> StoryMessa
     return msg
 
 
-def create_assistant_message(db: Session, data: StoryMessageCreateAssistant) -> StoryMessage:
+
+def create_assistant_message(db: Session, data: StoryMessageCreateAssistant, *, user_id: int) -> StoryMessage:
     msg = StoryMessage(
+        user_id=user_id,
         scene=data.scene,
         story_id=data.story_id,
         session_id=data.session_id,
@@ -41,10 +44,14 @@ def create_assistant_message(db: Session, data: StoryMessageCreateAssistant) -> 
     return msg
 
 
-def list_messages_by_session(db: Session, session_id: str):
+
+def list_messages_by_session(db: Session, session_id: str, *, user_id: int):
     return (
         db.query(StoryMessage)
-        .filter(StoryMessage.session_id == session_id)
+        .filter(
+            StoryMessage.session_id == session_id,
+            StoryMessage.user_id == user_id,
+        )
         .order_by(StoryMessage.created_at.asc(), StoryMessage.id.asc())
         .all()
     )

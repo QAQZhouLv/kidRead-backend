@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+
 from app.db.base import Base
 
 
@@ -7,6 +9,7 @@ class StorySession(Base):
     __tablename__ = "story_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True, default=0)
 
     scene = Column(String(50), nullable=False, index=True, default="bookchat")
     story_id = Column(Integer, nullable=False, index=True, default=0)
@@ -21,10 +24,6 @@ class StorySession(Base):
     pinned_at = Column(DateTime, nullable=True)
     title_source = Column(String(50), nullable=False, default="default")  # default / auto / manual
     is_auto_titled = Column(Boolean, nullable=False, default=False)
-
-    # 调试与上下文快照
-    context_snapshot = Column(Text, nullable=True)
-    last_guard_result = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -1,13 +1,16 @@
-import json
 from datetime import datetime
+
 from sqlalchemy.orm import Session
+
 from app.models.story_session import StorySession
 from app.schemas.session import StorySessionCreate
-from app.services.title_service import generate_session_title, DEFAULT_SESSION_TITLES
+from app.services.title_service import DEFAULT_SESSION_TITLES, generate_session_title
 
 
-def create_session(db: Session, data: StorySessionCreate) -> StorySession:
+
+def create_session(db: Session, data: StorySessionCreate, *, user_id: int) -> StorySession:
     session = StorySession(
+        user_id=user_id,
         scene=data.scene,
         story_id=data.story_id,
         session_id=data.session_id,
@@ -18,8 +21,6 @@ def create_session(db: Session, data: StorySessionCreate) -> StorySession:
         is_pinned=False,
         title_source="default",
         is_auto_titled=False,
-        context_snapshot=None,
-        last_guard_result=None,
     )
     db.add(session)
     db.commit()
@@ -27,12 +28,24 @@ def create_session(db: Session, data: StorySessionCreate) -> StorySession:
     return session
 
 
-def get_session_by_session_id(db: Session, session_id: str):
-    return db.query(StorySession).filter(StorySession.session_id == session_id).first()
+
+def get_session_by_session_id(db: Session, session_id: str, *, user_id: int):
+    return (
+        db.query(StorySession)
+        .filter(
+            StorySession.session_id == session_id,
+            StorySession.user_id == user_id,
+        )
+        .first()
+    )
 
 
-def list_sessions(db: Session, scene: str, story_id: int | None = None):
-    query = db.query(StorySession).filter(StorySession.scene == scene)
+
+def list_sessions(db: Session, *, user_id: int, scene: str, story_id: int | None = None):
+    query = db.query(StorySession).filter(
+        StorySession.scene == scene,
+        StorySession.user_id == user_id,
+    )
 
     if scene == "bookchat":
         query = query.filter(StorySession.story_id == (story_id or 0))
@@ -40,12 +53,13 @@ def list_sessions(db: Session, scene: str, story_id: int | None = None):
     return query.order_by(
         StorySession.is_pinned.desc(),
         StorySession.pinned_at.desc().nullslast(),
-        StorySession.updated_at.desc()
+        StorySession.updated_at.desc(),
     ).all()
 
 
-def update_session_draft(db: Session, session_id: str, draft_content: str):
-    session = get_session_by_session_id(db, session_id)
+
+def update_session_draft(db: Session, session_id: str, draft_content: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -55,8 +69,9 @@ def update_session_draft(db: Session, session_id: str, draft_content: str):
     return session
 
 
-def rename_session(db: Session, session_id: str, title: str):
-    session = get_session_by_session_id(db, session_id)
+
+def rename_session(db: Session, session_id: str, title: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -70,8 +85,9 @@ def rename_session(db: Session, session_id: str, title: str):
     return session
 
 
-def pin_session(db: Session, session_id: str):
-    session = get_session_by_session_id(db, session_id)
+
+def pin_session(db: Session, session_id: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -82,8 +98,9 @@ def pin_session(db: Session, session_id: str):
     return session
 
 
-def unpin_session(db: Session, session_id: str):
-    session = get_session_by_session_id(db, session_id)
+
+def unpin_session(db: Session, session_id: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -94,8 +111,9 @@ def unpin_session(db: Session, session_id: str):
     return session
 
 
-def delete_session(db: Session, session_id: str):
-    session = get_session_by_session_id(db, session_id)
+
+def delete_session(db: Session, session_id: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -104,8 +122,9 @@ def delete_session(db: Session, session_id: str):
     return True
 
 
-def clear_session_draft(db: Session, session_id: str):
-    session = get_session_by_session_id(db, session_id)
+
+def clear_session_draft(db: Session, session_id: str, *, user_id: int):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -116,23 +135,16 @@ def clear_session_draft(db: Session, session_id: str):
     return session
 
 
-def update_session_context(db: Session, session_id: str, snapshot: dict | None = None, guard_result: dict | None = None):
-    session = get_session_by_session_id(db, session_id)
-    if not session:
-        return None
 
-    if snapshot is not None:
-        session.context_snapshot = json.dumps(snapshot, ensure_ascii=False)
-    if guard_result is not None:
-        session.last_guard_result = json.dumps(guard_result, ensure_ascii=False)
-
-    db.commit()
-    db.refresh(session)
-    return session
-
-
-def auto_title_session_if_needed(db: Session, session_id: str, user_text: str, assistant_text: str):
-    session = get_session_by_session_id(db, session_id)
+def auto_title_session_if_needed(
+    db: Session,
+    *,
+    user_id: int,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+):
+    session = get_session_by_session_id(db, session_id, user_id=user_id)
     if not session:
         return None
 
@@ -147,7 +159,7 @@ def auto_title_session_if_needed(db: Session, session_id: str, user_text: str, a
         scene=session.scene,
         user_text=user_text,
         assistant_text=assistant_text,
-        fallback=current_title or "新对话"
+        fallback=current_title or "新对话",
     )
 
     if new_title:

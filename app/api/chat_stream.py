@@ -3,29 +3,30 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.agent.stream_runner import run_story_stream
+from app.core.security import AuthError, get_current_user_from_ws
 from app.db.session import SessionLocal
 from app.schemas.chat import ChatRequest
-from app.schemas.message import (
-    StoryMessageCreateAssistant,
-    StoryMessageCreateUser,
-)
-from app.services.message_service import (
-    create_assistant_message,
-    create_user_message,
-)
+from app.schemas.message import StoryMessageCreateAssistant, StoryMessageCreateUser
+from app.services.message_service import create_assistant_message, create_user_message
 from app.services.session_service import auto_title_session_if_needed
-from app.services.chat_context_service import (
-    enrich_chat_request_from_db,
-    update_session_context_snapshot,
-)
 
 router = APIRouter(tags=["chat-stream"])
 
 
 @router.websocket("/ws/chat/stream")
 async def chat_stream(websocket: WebSocket):
-    await websocket.accept()
     db = SessionLocal()
+
+    try:
+        current_user = get_current_user_from_ws(db, websocket)
+    except AuthError as exc:
+        await websocket.accept()
+        await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False))
+        await websocket.close(code=4401)
+        db.close()
+        return
+
+    await websocket.accept()
 
     async def emit(payload):
         await websocket.send_text(json.dumps(payload, ensure_ascii=False))
@@ -45,10 +46,10 @@ async def chat_stream(websocket: WebSocket):
                     session_id=req.session_id,
                     input_mode=req.input_mode,
                     user_text=req.text,
-                )
+                ),
+                user_id=current_user.id,
             )
 
-            snapshot = enrich_chat_request_from_db(db, req)
             result = await run_story_stream(req, emit)
 
             create_assistant_message(
@@ -63,18 +64,13 @@ async def chat_stream(websocket: WebSocket):
                     guide_text=result.guide_text,
                     choices=result.choices,
                     should_save=result.should_save,
-                )
-            )
-
-            update_session_context_snapshot(
-                db,
-                req.session_id,
-                snapshot,
-                getattr(result, "_guard_result", None),
+                ),
+                user_id=current_user.id,
             )
 
             auto_title_session_if_needed(
                 db=db,
+                user_id=current_user.id,
                 session_id=req.session_id,
                 user_text=req.text,
                 assistant_text=f"{result.lead_text}\n{result.story_text}\n{result.guide_text}",
@@ -84,10 +80,7 @@ async def chat_stream(websocket: WebSocket):
         pass
     except Exception as e:
         try:
-            await emit({
-                "type": "error",
-                "message": str(e),
-            })
+            await emit({"type": "error", "message": str(e)})
         except Exception:
             pass
     finally:

@@ -4,25 +4,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.app_config import router as app_config_router
+from app.api.asr import router as asr_router
+from app.api.auth import router as auth_router
+from app.api.chat import router as chat_router
+from app.api.chat_stream import router as chat_stream_router
+from app.api.messages import router as messages_router
+from app.api.openings import router as openings_router
+from app.api.sessions import router as sessions_router
+from app.api.stories import router as stories_router
+from app.api.tts import router as tts_router
 from app.core.config import APP_NAME
 from app.db.base import Base
-from app.db.session import engine, SessionLocal
-
+from app.db.session import SessionLocal, engine
+from app.models.opening_topic import OpeningTopic
 from app.models.story import Story
 from app.models.story_message import StoryMessage
 from app.models.story_session import StorySession
-from app.models.opening_topic import OpeningTopic
-
-from app.api.chat import router as chat_router
-from app.api.stories import router as stories_router
-from app.api.sessions import router as sessions_router
-from app.api.asr import router as asr_router
-from app.api.messages import router as messages_router
-from app.api.chat_stream import router as chat_stream_router
-from app.api.tts import router as tts_router
-from app.api.openings import router as openings_router
-
-from app.api.app_config import router as app_config_router
+from app.models.user import User
 
 Base.metadata.create_all(bind=engine)
 
@@ -36,13 +35,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# static_dir = Path("./static")
 BASE_DIR = Path(__file__).resolve().parent.parent
 static_dir = BASE_DIR / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
 (static_dir / "tts").mkdir(parents=True, exist_ok=True)
 (static_dir / "covers").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 
 
 def seed_opening_topics():
@@ -79,6 +78,7 @@ def health():
     return {"ok": True}
 
 
+app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(stories_router)
 app.include_router(sessions_router)
