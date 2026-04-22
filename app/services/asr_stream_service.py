@@ -31,10 +31,9 @@ XF_DOMAIN = os.getenv("XF_DOMAIN", "iat")
 XF_ACCENT = os.getenv("XF_ACCENT", "mandarin")
 XF_VAD_EOS = int(os.getenv("XF_VAD_EOS", "5000"))
 
-# 你当前历史代码里用的是 mp3/lame，这里默认也沿用它
-# 如果后面你小程序前端改成 pcm，这里可以改成 raw / speex / lame 等对应值
+# 当前前端默认发送 16k 单声道 PCM 分帧，这里默认按 raw/PCM 对齐
 XF_AUDIO_FORMAT = os.getenv("XF_AUDIO_FORMAT", "audio/L16;rate=16000")
-XF_AUDIO_ENCODING = os.getenv("XF_AUDIO_ENCODING", "lame")
+XF_AUDIO_ENCODING = os.getenv("XF_AUDIO_ENCODING", "raw")
 
 
 def _check_env():

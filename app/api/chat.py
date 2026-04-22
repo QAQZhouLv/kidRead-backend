@@ -6,11 +6,12 @@ from app.db.session import SessionLocal
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.message import StoryMessageCreateAssistant, StoryMessageCreateUser
-from app.services.chat_service import generate_chat_response
+from app.services.chat_context_service import update_session_context_snapshot
+from app.agent.runner import run_story_agent
 from app.services.message_service import create_assistant_message, create_user_message
+from app.services.session_service import auto_title_session_if_needed
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-
 
 
 def get_db():
@@ -19,7 +20,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 
 def get_current_user_dep(
@@ -48,7 +48,7 @@ def unified_chat(
             user_id=current_user.id,
         )
 
-        result = generate_chat_response(req)
+        result = run_story_agent(req, user_id=current_user.id)
 
         create_assistant_message(
             db,
@@ -63,6 +63,22 @@ def unified_chat(
                 choices=result.choices,
                 should_save=result.should_save,
             ),
+            user_id=current_user.id,
+        )
+
+        auto_title_session_if_needed(
+            db=db,
+            user_id=current_user.id,
+            session_id=req.session_id,
+            user_text=req.text,
+            assistant_text="\n".join([result.lead_text, result.story_text, result.guide_text]),
+        )
+
+        update_session_context_snapshot(
+            db=db,
+            session_id=req.session_id,
+            snapshot=getattr(result, "_context_snapshot", {}) or {},
+            guard_result=getattr(result, "_guard_result", None),
             user_id=current_user.id,
         )
 

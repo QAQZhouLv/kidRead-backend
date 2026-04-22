@@ -1,17 +1,17 @@
 import json
 from typing import Any, Dict, Optional
 
+from app.agent.graph import prepare_chat_state
 from app.agent.llm import get_chat_model
 from app.agent.runner import (
     build_history_text,
+    build_skill_instruction,
     call_tool_by_intent,
-    fill_default_choices,
     evaluate_and_maybe_rewrite,
+    fill_default_choices,
 )
-from app.agent.tools import classify_intent_tool
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.rule_service import normalize_age_group
-
 
 OPEN_TAGS = {
     "<LEAD>": "lead",
@@ -36,7 +36,6 @@ def extract_chunk_text(chunk: Any) -> str:
         return ""
 
     content = getattr(chunk, "content", None)
-
     if isinstance(content, str):
         return content
 
@@ -55,7 +54,7 @@ def extract_chunk_text(chunk: Any) -> str:
     return str(content or "")
 
 
-def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
+def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill: str):
     history_block = build_history_text(req)
     current_story = (req.current_story_content or "").strip()
     draft_story = (req.session_draft_content or "").strip()
@@ -64,7 +63,10 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
     story_summary = req.story_summary or {}
 
     system = f"""
-你是儿童故事共创助手。
+你是儿童故事共创助手，也是一个受控技能节点。
+
+技能说明：
+{build_skill_instruction(skill)}
 
 你现在必须按“标签协议”输出内容，不能输出 JSON 主体，不能输出 markdown，不能输出解释。
 
@@ -87,17 +89,14 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
 1. 内容适合 {req.age} 岁儿童，年龄档为 {normalize_age_group(req.age)}。
 2. 语言温和、具体、易理解。
 3. 必须保持角色、称呼、设定、情节前后连贯。
-4. lead 只写承接用户这句话的回应，要有回应感，不能空泛。
+4. lead 只写承接用户这句话的回应，要有回应感。
 5. story 只能写故事正文，不能把解释、提示、选项写进 story。
 6. guide 只负责自然引导下一步。
-7. META 中只能有这三个字段：
-   - choices: 2~4 个短选项
-   - should_save: true / false
-   - save_mode: 固定为 "append"
+7. META 中只能有：choices / should_save / save_mode。
 8. ask_about_story、unsafety、end_chat 时，<STORY></STORY> 必须为空。
-9. end_chat 时不要继续讲新故事，只做礼貌收尾。
-10. 如果是 bookchat，优先依据 story_spec、story_state、story_summary、当前正式正文和本次会话草稿；历史记录只作补充参考。
-11. 绝对不要输出任何标签以外的额外文字。
+9. end_chat 时只做礼貌收尾，不开启新情节。
+10. 在 bookchat 场景下，优先依据 story_spec、story_state、story_summary、当前正式正文和本次会话草稿；历史记录只作补充参考。
+11. 不要输出任何标签以外的额外文字。
 12. 所有标签必须闭合。
 
 当前 scene：{req.scene}
@@ -118,10 +117,10 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
 {story_summary}
 
 【当前正式正文（最高优先级）】
-{current_story if current_story else "无"}
+{current_story if current_story else '无'}
 
 【本次会话草稿（第二优先级）】
-{draft_story if draft_story else "无"}
+{draft_story if draft_story else '无'}
 
 【最近聊天记录（仅补充参考）】
 {history_block}
@@ -135,7 +134,6 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str):
 
 def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
     meta_text = (meta_text or "").strip()
-
     data: Dict[str, Any] = {}
     if meta_text:
         try:
@@ -147,13 +145,11 @@ def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
     if not isinstance(choices, list):
         choices = []
     choices = [str(x).strip() for x in choices if str(x).strip()][:4]
-
     if not choices:
         choices = fill_default_choices(intent)
 
     should_save = bool(data.get("should_save", False))
     save_mode = str(data.get("save_mode", "append") or "append").strip() or "append"
-
     if intent in ("ask_about_story", "unsafety", "end_chat"):
         should_save = False
 
@@ -208,7 +204,6 @@ class TagStreamParser:
 
             close_tag = CLOSE_TAGS[self.current_section]
             idx = self.buffer.find(close_tag)
-
             if idx != -1:
                 content = self.buffer[:idx]
                 if content:
@@ -238,69 +233,56 @@ class TagStreamParser:
         best_idx = None
         best_tag_text = None
         best_section = None
-
         for tag_text, section in OPEN_TAGS.items():
             idx = self.buffer.find(tag_text)
             if idx != -1 and (best_idx is None or idx < best_idx):
                 best_idx = idx
                 best_tag_text = tag_text
                 best_section = section
-
         if best_idx is None:
             return None
-
         prefix = self.buffer[:best_idx]
         return prefix, best_tag_text, best_section
 
     async def _append_and_emit(self, section: str, text: str):
         if not text:
             return
-
         if section == "lead":
             self.lead_text += text
             await self.emit({"type": "section_delta", "section": "lead", "delta": text})
             return
-
         if section == "story":
             self.story_text += text
             await self.emit({"type": "section_delta", "section": "story", "delta": text})
             return
-
         if section == "guide":
             self.guide_text += text
             await self.emit({"type": "section_delta", "section": "guide", "delta": text})
             return
-
         if section == "meta":
             self.meta_text += text
-            return
 
 
-async def run_story_stream(req: ChatRequest, emit):
-    intent = classify_intent_tool.invoke({
-        "scene": req.scene,
-        "user_text": req.text,
-    })
+async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None):
+    prepared = prepare_chat_state(req, user_id=user_id)
+    intent = prepared["intent"]
+    skill = prepared.get("skill", "continue")
 
     await emit({"type": "start"})
     await emit({"type": "intent", "intent": intent})
 
     tool_result = call_tool_by_intent(req, intent)
-    system, user = build_stream_messages(req, intent, tool_result)
+    system, user = build_stream_messages(req, intent, tool_result, skill)
 
     llm = get_chat_model()
     parser = TagStreamParser(emit)
 
-    async for chunk in llm.astream([
-        ("system", system),
-        ("user", user),
-    ]):
+    async for chunk in llm.astream([("system", system), ("user", user)]):
         delta_text = extract_chunk_text(chunk)
         if delta_text:
             await parser.feed(delta_text)
 
     await parser.finalize()
-
     meta = normalize_stream_meta(parser.meta_text, intent)
 
     result = ChatResponse(
@@ -316,13 +298,10 @@ async def run_story_stream(req: ChatRequest, emit):
     result, guard = evaluate_and_maybe_rewrite(req, result)
     if guard is not None:
         object.__setattr__(result, "_guard_result", guard)
+    object.__setattr__(result, "_context_snapshot", prepared.get("snapshot") or {})
 
     if result.story_text != parser.story_text.strip():
-        await emit({
-            "type": "section_replace",
-            "section": "story",
-            "content": result.story_text,
-        })
+        await emit({"type": "section_replace", "section": "story", "content": result.story_text})
 
     if intent in ("ask_about_story", "unsafety", "end_chat"):
         result.story_text = ""
@@ -334,6 +313,5 @@ async def run_story_stream(req: ChatRequest, emit):
         "should_save": result.should_save,
         "save_mode": result.save_mode,
     })
-
     await emit({"type": "done"})
     return result

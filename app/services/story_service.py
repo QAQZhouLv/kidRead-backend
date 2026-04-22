@@ -2,9 +2,8 @@ from sqlalchemy.orm import Session
 
 from app.models.story import Story
 from app.schemas.story import StoryCreate, StoryUpdate
+from app.services.rule_service import normalize_age_group
 from app.services.title_service import build_fast_story_title
-from app.services.cover_service import build_fallback_cover
-
 
 
 def create_story(db: Session, data: StoryCreate, *, user_id: int) -> Story:
@@ -22,17 +21,14 @@ def create_story(db: Session, data: StoryCreate, *, user_id: int) -> Story:
         content=content,
         title_source=title_source,
         cover_status="fallback",
+        target_age=normalize_age_group(data.age or 6),
+        difficulty_level="L2",
+        safety_status="passed",
     )
     db.add(story)
     db.commit()
     db.refresh(story)
-
-    fallback_cover_url = build_fallback_cover(story)
-    story.fallback_cover_url = fallback_cover_url
-    db.commit()
-    db.refresh(story)
     return story
-
 
 
 def get_story(db: Session, story_id: int, *, user_id: int):
@@ -41,7 +37,6 @@ def get_story(db: Session, story_id: int, *, user_id: int):
         .filter(Story.id == story_id, Story.user_id == user_id)
         .first()
     )
-
 
 
 def list_stories(db: Session, *, user_id: int):
@@ -53,7 +48,6 @@ def list_stories(db: Session, *, user_id: int):
     )
 
 
-
 def update_story(db: Session, story_id: int, data: StoryUpdate, *, user_id: int):
     story = get_story(db, story_id, user_id=user_id)
     if not story:
@@ -61,8 +55,10 @@ def update_story(db: Session, story_id: int, data: StoryUpdate, *, user_id: int)
 
     for field in [
         "title", "age", "summary", "content",
+        "story_spec", "story_state", "story_summary",
+        "target_age", "difficulty_level", "safety_status", "safety_tags",
         "cover_image_url", "fallback_cover_url", "cover_status",
-        "cover_prompt", "title_source"
+        "cover_prompt", "title_source",
     ]:
         value = getattr(data, field, None)
         if value is not None:
@@ -73,15 +69,18 @@ def update_story(db: Session, story_id: int, data: StoryUpdate, *, user_id: int)
     return story
 
 
-
 def append_story_content(db: Session, story_id: int, story_text: str, *, user_id: int):
     story = get_story(db, story_id, user_id=user_id)
     if not story:
         return None
 
+    clean_story_text = (story_text or "").strip()
+    if not clean_story_text:
+        return story
+
     if story.content and not story.content.endswith("\n"):
         story.content += "\n"
-    story.content += story_text
+    story.content += clean_story_text
 
     db.commit()
     db.refresh(story)

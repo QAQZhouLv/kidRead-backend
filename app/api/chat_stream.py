@@ -7,6 +7,7 @@ from app.core.security import AuthError, get_current_user_from_ws
 from app.db.session import SessionLocal
 from app.schemas.chat import ChatRequest
 from app.schemas.message import StoryMessageCreateAssistant, StoryMessageCreateUser
+from app.services.chat_context_service import update_session_context_snapshot
 from app.services.message_service import create_assistant_message, create_user_message
 from app.services.session_service import auto_title_session_if_needed
 
@@ -35,7 +36,6 @@ async def chat_stream(websocket: WebSocket):
         while True:
             raw = await websocket.receive_text()
             data = json.loads(raw)
-
             req = ChatRequest(**data)
 
             create_user_message(
@@ -50,7 +50,7 @@ async def chat_stream(websocket: WebSocket):
                 user_id=current_user.id,
             )
 
-            result = await run_story_stream(req, emit)
+            result = await run_story_stream(req, emit, user_id=current_user.id)
 
             create_assistant_message(
                 db,
@@ -73,7 +73,15 @@ async def chat_stream(websocket: WebSocket):
                 user_id=current_user.id,
                 session_id=req.session_id,
                 user_text=req.text,
-                assistant_text=f"{result.lead_text}\n{result.story_text}\n{result.guide_text}",
+                assistant_text="\n".join([result.lead_text, result.story_text, result.guide_text]),
+            )
+
+            update_session_context_snapshot(
+                db=db,
+                session_id=req.session_id,
+                snapshot=getattr(result, "_context_snapshot", {}) or {},
+                guard_result=getattr(result, "_guard_result", None),
+                user_id=current_user.id,
             )
 
     except WebSocketDisconnect:

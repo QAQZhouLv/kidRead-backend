@@ -17,13 +17,17 @@ class StorySession(Base):
 
     title = Column(String(255), nullable=False, default="新对话")
     summary = Column(Text, nullable=True)
+    # 统一语义：尚未并入正式正文的故事草稿
     draft_content = Column(Text, nullable=False, default="")
     status = Column(String(50), nullable=False, default="active")
 
     is_pinned = Column(Boolean, nullable=False, default=False)
     pinned_at = Column(DateTime, nullable=True)
-    title_source = Column(String(50), nullable=False, default="default")  # default / auto / manual
+    title_source = Column(String(50), nullable=False, default="default")
     is_auto_titled = Column(Boolean, nullable=False, default=False)
+
+    context_snapshot = Column(Text, nullable=True)
+    last_guard_result = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
