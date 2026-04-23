@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.core.runtime import build_runtime
 from app.db.session import SessionLocal
 from app.models.story import Story
 
@@ -26,7 +25,6 @@ def split_story_chunks(
 
     chunks: list[str] = []
     current = ""
-
     for para in paragraphs:
         candidate = para if not current else f"{current}\n{para}"
         if len(candidate) <= chunk_size:
@@ -34,51 +32,43 @@ def split_story_chunks(
             continue
 
         if current:
-            chunks.append(current.strip())
+            chunks.append(current)
             if chunk_overlap > 0 and len(current) > chunk_overlap:
                 current = current[-chunk_overlap:] + "\n" + para
             else:
                 current = para
         else:
-            chunks.append(para[:chunk_size].strip())
-            tail_start = max(0, chunk_size - chunk_overlap)
-            current = para[tail_start:].strip()
+            chunks.append(para[:chunk_size])
+            current = para[chunk_size - chunk_overlap :] if len(para) > chunk_size else ""
 
     if current.strip():
         chunks.append(current.strip())
 
     cleaned: list[str] = []
-    seen = set()
+    seen: set[str] = set()
     for chunk in chunks:
-        value = (chunk or "").strip()
-        if not value or value in seen:
+        chunk = chunk.strip()
+        if not chunk or chunk in seen:
             continue
-        seen.add(value)
-        cleaned.append(value)
+        seen.add(chunk)
+        cleaned.append(chunk)
     return cleaned
 
 
-def sync_story_content_to_vector_store(vector_store, *, story_id: int, content: str) -> None:
-    chunks = split_story_chunks(content or "")
-    vector_store.upsert_story_chunks(story_id=story_id, chunks=chunks)
-
-
-def delete_story_from_vector_store(vector_store, *, story_id: int) -> None:
-    vector_store.delete_story_chunks(story_id=story_id)
-
-
 def sync_story_to_vector_store(db: Session, story: Story) -> None:
+    # local import to avoid import cycle during app startup
+    from app.core.runtime import build_runtime
+
     runtime = build_runtime(db)
-    sync_story_content_to_vector_store(
-        runtime.vector_store,
-        story_id=story.id,
-        content=story.content or "",
-    )
+    chunks = split_story_chunks(story.content or "")
+    runtime.vector_store.upsert_story_chunks(story_id=story.id, chunks=chunks)
 
 
-def delete_story_vectors_by_id(db: Session, *, story_id: int) -> None:
+def delete_story_from_vector_store(db: Session, story_id: int) -> None:
+    from app.core.runtime import build_runtime
+
     runtime = build_runtime(db)
-    delete_story_from_vector_store(runtime.vector_store, story_id=story_id)
+    runtime.vector_store.delete_story_chunks(story_id=story_id)
 
 
 def sync_story_vectors_task(story_id: int) -> None:
@@ -95,6 +85,6 @@ def sync_story_vectors_task(story_id: int) -> None:
 def delete_story_vectors_task(story_id: int) -> None:
     db = SessionLocal()
     try:
-        delete_story_vectors_by_id(db, story_id=story_id)
+        delete_story_from_vector_store(db, story_id)
     finally:
         db.close()

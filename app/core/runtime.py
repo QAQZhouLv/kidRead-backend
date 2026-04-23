@@ -26,7 +26,6 @@ from app.repositories.story_repository import StoryRepository
 from app.services.embedding_service import embed_query
 from app.tasks.base import TaskQueue
 from app.tasks.inline_queue import InlineQueue
-from app.tasks.job_runner import build_inline_handlers
 from app.tasks.redis_queue import RedisQueue
 from app.vectorstore.base import StoryVectorStore
 from app.vectorstore.milvus_vector_store import MilvusVectorStore
@@ -55,6 +54,10 @@ def _build_cache(flags: FeatureFlags) -> CacheBackend:
 
 
 def _build_task_queue(flags: FeatureFlags, db: Session) -> TaskQueue:
+    # IMPORTANT: local import to avoid circular import:
+    # runtime -> job_runner -> runtime
+    from app.tasks.job_runner import build_inline_handlers
+
     if flags.use_async_side_effects and flags.use_pg_redis_backends and REDIS_URL:
         try:
             return RedisQueue(REDIS_URL, queue_name=REDIS_QUEUE_NAME)
@@ -70,7 +73,6 @@ def _build_vector_store(flags: FeatureFlags) -> StoryVectorStore:
     backend = (VECTOR_BACKEND or "simple").strip().lower()
     if backend in ("", "simple", "lexical"):
         return SimpleTextVectorStore()
-
     if backend == "milvus":
         try:
             return MilvusVectorStore(
@@ -82,7 +84,6 @@ def _build_vector_store(flags: FeatureFlags) -> StoryVectorStore:
             )
         except Exception:
             return NoopVectorStore()
-
     return NoopVectorStore()
 
 

@@ -5,21 +5,22 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.runtime import build_runtime
 from app.repositories.sqlalchemy_session_repository import SQLAlchemySessionRepository
-from app.services.cover_service import finalize_story_assets
-from app.services.story_vector_sync_service import (
-    delete_story_from_vector_store,
-    sync_story_content_to_vector_store,
-)
 from app.services.title_service import DEFAULT_SESSION_TITLES, generate_session_title
-from app.tasks.job_names import (
-    AUTO_TITLE_SESSION,
-    DELETE_STORY_VECTORS,
-    FINALIZE_STORY_ASSETS,
-    SYNC_STORY_VECTORS,
-    UPDATE_CONTEXT_SNAPSHOT,
-)
+from app.tasks.job_names import AUTO_TITLE_SESSION, UPDATE_CONTEXT_SNAPSHOT
+
+# Optional job names. Import lazily / defensively so this file does not create
+# import-time cycles when new task modules are introduced.
+try:
+    from app.tasks.job_names import (
+        DELETE_STORY_VECTORS,
+        FINALIZE_STORY_ASSETS,
+        SYNC_STORY_VECTORS,
+    )
+except Exception:  # pragma: no cover
+    DELETE_STORY_VECTORS = "delete_story_vectors"
+    FINALIZE_STORY_ASSETS = "finalize_story_assets"
+    SYNC_STORY_VECTORS = "sync_story_vectors"
 
 
 def _handle_auto_title_session(db: Session, payload: dict[str, Any]) -> None:
@@ -66,31 +67,32 @@ def _handle_update_context_snapshot(db: Session, payload: dict[str, Any]) -> Non
 
 
 def _handle_finalize_story_assets(_: Session, payload: dict[str, Any]) -> None:
-    story_id = int(payload.get("story_id") or 0)
-    if story_id <= 0:
+    story_id = payload.get("story_id")
+    if story_id is None:
         return
-    finalize_story_assets(story_id)
+    # local import to avoid circular imports at module import time
+    from app.services.cover_service import finalize_story_assets
+
+    finalize_story_assets(int(story_id))
 
 
-def _handle_sync_story_vectors(db: Session, payload: dict[str, Any]) -> None:
-    story_id = int(payload.get("story_id") or 0)
-    content = payload.get("content") or ""
-    if story_id <= 0:
+def _handle_sync_story_vectors(_: Session, payload: dict[str, Any]) -> None:
+    story_id = payload.get("story_id")
+    if story_id is None:
         return
-    runtime = build_runtime(db)
-    sync_story_content_to_vector_store(
-        runtime.vector_store,
-        story_id=story_id,
-        content=content,
-    )
+    # local import to avoid: runtime -> job_runner -> story_vector_sync_service -> runtime
+    from app.services.story_vector_sync_service import sync_story_vectors_task
+
+    sync_story_vectors_task(int(story_id))
 
 
-def _handle_delete_story_vectors(db: Session, payload: dict[str, Any]) -> None:
-    story_id = int(payload.get("story_id") or 0)
-    if story_id <= 0:
+def _handle_delete_story_vectors(_: Session, payload: dict[str, Any]) -> None:
+    story_id = payload.get("story_id")
+    if story_id is None:
         return
-    runtime = build_runtime(db)
-    delete_story_from_vector_store(runtime.vector_store, story_id=story_id)
+    from app.services.story_vector_sync_service import delete_story_vectors_task
+
+    delete_story_vectors_task(int(story_id))
 
 
 def handle_job(db: Session, job_name: str, payload: dict[str, Any]) -> None:
