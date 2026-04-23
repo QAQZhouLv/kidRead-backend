@@ -156,6 +156,10 @@ class ASRStreamBridge:
         self._final_text = ""
         self._result_parts = []
 
+    @property
+    def final_text(self) -> str:
+        return self._final_text or self._last_partial_text or ""
+
     async def start(self):
         """
         建立与讯飞 websocket 的连接，并启动后台接收循环
@@ -295,9 +299,9 @@ class ASRStreamBridge:
         except Exception:
             pass
 
-        # 等待最终结果回来，最多等 3 秒
+        # 等待最终结果回来，最多等 5 秒
         try:
-            await asyncio.wait_for(self._done_event.wait(), timeout=3.0)
+            await asyncio.wait_for(self._done_event.wait(), timeout=5.0)
         except Exception:
             pass
 
