@@ -10,7 +10,12 @@ CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
 
 
-def split_story_chunks(full_content: str, *, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP) -> list[str]:
+def split_story_chunks(
+    full_content: str,
+    *,
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
+) -> list[str]:
     text = (full_content or "").replace("\r", "").strip()
     if not text:
         return []
@@ -21,6 +26,7 @@ def split_story_chunks(full_content: str, *, chunk_size: int = CHUNK_SIZE, chunk
 
     chunks: list[str] = []
     current = ""
+
     for para in paragraphs:
         candidate = para if not current else f"{current}\n{para}"
         if len(candidate) <= chunk_size:
@@ -28,38 +34,51 @@ def split_story_chunks(full_content: str, *, chunk_size: int = CHUNK_SIZE, chunk
             continue
 
         if current:
-            chunks.append(current)
+            chunks.append(current.strip())
             if chunk_overlap > 0 and len(current) > chunk_overlap:
                 current = current[-chunk_overlap:] + "\n" + para
             else:
                 current = para
         else:
-            chunks.append(para[:chunk_size])
-            current = para[chunk_size - chunk_overlap :] if len(para) > chunk_size else ""
+            chunks.append(para[:chunk_size].strip())
+            tail_start = max(0, chunk_size - chunk_overlap)
+            current = para[tail_start:].strip()
 
     if current.strip():
         chunks.append(current.strip())
 
-    cleaned = []
+    cleaned: list[str] = []
     seen = set()
     for chunk in chunks:
-        chunk = chunk.strip()
-        if not chunk or chunk in seen:
+        value = (chunk or "").strip()
+        if not value or value in seen:
             continue
-        seen.add(chunk)
-        cleaned.append(chunk)
+        seen.add(value)
+        cleaned.append(value)
     return cleaned
+
+
+def sync_story_content_to_vector_store(vector_store, *, story_id: int, content: str) -> None:
+    chunks = split_story_chunks(content or "")
+    vector_store.upsert_story_chunks(story_id=story_id, chunks=chunks)
+
+
+def delete_story_from_vector_store(vector_store, *, story_id: int) -> None:
+    vector_store.delete_story_chunks(story_id=story_id)
 
 
 def sync_story_to_vector_store(db: Session, story: Story) -> None:
     runtime = build_runtime(db)
-    chunks = split_story_chunks(story.content or "")
-    runtime.vector_store.upsert_story_chunks(story_id=story.id, chunks=chunks)
+    sync_story_content_to_vector_store(
+        runtime.vector_store,
+        story_id=story.id,
+        content=story.content or "",
+    )
 
 
-def delete_story_from_vector_store(db: Session, story_id: int) -> None:
+def delete_story_vectors_by_id(db: Session, *, story_id: int) -> None:
     runtime = build_runtime(db)
-    runtime.vector_store.delete_story_chunks(story_id=story_id)
+    delete_story_from_vector_store(runtime.vector_store, story_id=story_id)
 
 
 def sync_story_vectors_task(story_id: int) -> None:
@@ -76,6 +95,6 @@ def sync_story_vectors_task(story_id: int) -> None:
 def delete_story_vectors_task(story_id: int) -> None:
     db = SessionLocal()
     try:
-        delete_story_from_vector_store(db, story_id)
+        delete_story_vectors_by_id(db, story_id=story_id)
     finally:
         db.close()

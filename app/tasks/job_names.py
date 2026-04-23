@@ -1,2 +1,5 @@
 AUTO_TITLE_SESSION = "auto_title_session"
 UPDATE_CONTEXT_SNAPSHOT = "update_context_snapshot"
+FINALIZE_STORY_ASSETS = "finalize_story_assets"
+SYNC_STORY_VECTORS = "sync_story_vectors"
+DELETE_STORY_VECTORS = "delete_story_vectors"

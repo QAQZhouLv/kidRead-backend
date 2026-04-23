@@ -4,14 +4,27 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header, 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.runtime import build_runtime
 from app.core.security import get_current_user
 from app.db.session import SessionLocal
 from app.models.story import Story
 from app.models.user import User
 from app.schemas.story import StoryAppendRequest, StoryCreate
 from app.services.cover_service import finalize_story_assets
-from app.services.story_service import append_story_content, create_story as service_create_story, get_story as service_get_story
-from app.services.story_vector_sync_service import delete_story_vectors_task, sync_story_vectors_task
+from app.services.story_service import (
+    append_story_content,
+    create_story as service_create_story,
+    get_story as service_get_story,
+)
+from app.services.story_vector_sync_service import (
+    delete_story_vectors_task,
+    sync_story_vectors_task,
+)
+from app.tasks.job_names import (
+    DELETE_STORY_VECTORS,
+    FINALIZE_STORY_ASSETS,
+    SYNC_STORY_VECTORS,
+)
 
 router = APIRouter(prefix="/api/stories", tags=["stories"])
 
@@ -60,6 +73,32 @@ def get_current_user_dep(
     return get_current_user(db=db, authorization=authorization)
 
 
+def _build_vector_payload(story: Story) -> dict:
+    return {
+        "story_id": story.id,
+        "content": story.content or "",
+    }
+
+
+def _enqueue_story_side_effects(runtime, story: Story) -> None:
+    payload = {"story_id": story.id}
+    runtime.task_queue.enqueue(FINALIZE_STORY_ASSETS, payload)
+    runtime.task_queue.enqueue(SYNC_STORY_VECTORS, _build_vector_payload(story))
+
+
+def _background_story_side_effects(background_tasks: BackgroundTasks, story: Story) -> None:
+    background_tasks.add_task(finalize_story_assets, story.id)
+    background_tasks.add_task(sync_story_vectors_task, story.id)
+
+
+def _enqueue_story_delete_side_effects(runtime, story_id: int) -> None:
+    runtime.task_queue.enqueue(DELETE_STORY_VECTORS, {"story_id": story_id})
+
+
+def _background_story_delete_side_effects(background_tasks: BackgroundTasks, story_id: int) -> None:
+    background_tasks.add_task(delete_story_vectors_task, story_id)
+
+
 @router.get("")
 def list_stories(
     include_deleted: bool = Query(False),
@@ -104,8 +143,13 @@ def create_story_api(
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
     story = service_create_story(db, data, user_id=current_user.id)
-    background_tasks.add_task(finalize_story_assets, story.id)
-    background_tasks.add_task(sync_story_vectors_task, story.id)
+    runtime = build_runtime(db)
+
+    if runtime.flags.use_async_side_effects:
+        _enqueue_story_side_effects(runtime, story)
+    else:
+        _background_story_side_effects(background_tasks, story)
+
     return story_to_dict(story)
 
 
@@ -129,8 +173,12 @@ def append_story_api(
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
 
-    background_tasks.add_task(finalize_story_assets, story.id)
-    background_tasks.add_task(sync_story_vectors_task, story.id)
+    runtime = build_runtime(db)
+    if runtime.flags.use_async_side_effects:
+        _enqueue_story_side_effects(runtime, story)
+    else:
+        _background_story_side_effects(background_tasks, story)
+
     return story_to_dict(story)
 
 
@@ -216,7 +264,12 @@ def soft_delete_story(
     db.commit()
     db.refresh(story)
 
-    background_tasks.add_task(delete_story_vectors_task, story_id)
+    runtime = build_runtime(db)
+    if runtime.flags.use_async_side_effects:
+        _enqueue_story_delete_side_effects(runtime, story_id)
+    else:
+        _background_story_delete_side_effects(background_tasks, story_id)
+
     return {
         "ok": True,
         "id": story_id,

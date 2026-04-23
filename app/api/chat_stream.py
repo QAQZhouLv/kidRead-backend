@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.schemas.chat import ChatRequest
 from app.services.chat_context_service import update_session_context_snapshot
 from app.services.session_service import auto_title_session_if_needed
+from app.tasks.job_names import AUTO_TITLE_SESSION, UPDATE_CONTEXT_SNAPSHOT
 
 router = APIRouter(tags=["chat-stream"])
 
@@ -55,8 +56,8 @@ def _run_side_effects_inline(db, *, req: ChatRequest, result, user_id: int) -> N
 
 def _enqueue_side_effects(runtime, *, req: ChatRequest, result, user_id: int) -> None:
     title_payload, context_payload = _build_side_effect_payloads(req, result, user_id)
-    runtime.task_queue.enqueue("auto_title_session", title_payload)
-    runtime.task_queue.enqueue("update_context_snapshot", context_payload)
+    runtime.task_queue.enqueue(AUTO_TITLE_SESSION, title_payload)
+    runtime.task_queue.enqueue(UPDATE_CONTEXT_SNAPSHOT, context_payload)
 
 
 @router.websocket("/ws/chat/stream")

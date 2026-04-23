@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 
 from app.core.config import REDIS_QUEUE_NAME, REDIS_URL
 from app.db.session import SessionLocal
@@ -13,7 +12,7 @@ except Exception:  # pragma: no cover
     redis = None
 
 
-def run_worker(poll_interval: float = 0.5):
+def run_worker(block_timeout: int = 5):
     if redis is None:
         raise RuntimeError("redis package is not installed")
     if not REDIS_URL:
@@ -22,13 +21,13 @@ def run_worker(poll_interval: float = 0.5):
     client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
     while True:
-        item = client.lpop(REDIS_QUEUE_NAME)
+        item = client.brpop(REDIS_QUEUE_NAME, timeout=block_timeout)
         if not item:
-            time.sleep(poll_interval)
             continue
 
+        _, raw = item
         try:
-            job = json.loads(item)
+            job = json.loads(raw)
             job_name = job.get("job_name") or ""
             payload = job.get("payload") or {}
         except Exception:
