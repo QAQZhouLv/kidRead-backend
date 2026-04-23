@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 from app.agent.graph import prepare_chat_state
 from app.agent.llm import get_chat_model
@@ -15,21 +16,31 @@ from app.agent.runner import (
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.rule_service import normalize_age_group
 
-# Avoid XML/HTML-like tags. They are brittle in prompts, logs, and tool-generated code.
+# Prefer the new [[TAG]] protocol, but keep legacy <TAG> compatibility so
+# partially migrated prompts / cached model habits do not leak raw markers.
 OPEN_TAGS = {
     "[[LEAD]]": "lead",
     "[[STORY]]": "story",
     "[[GUIDE]]": "guide",
     "[[META]]": "meta",
+    "<LEAD>": "lead",
+    "<STORY>": "story",
+    "<GUIDE>": "guide",
+    "<META>": "meta",
 }
 CLOSE_TAGS = {
-    "lead": "[[/LEAD]]",
-    "story": "[[/STORY]]",
-    "guide": "[[/GUIDE]]",
-    "meta": "[[/META]]",
+    "lead": ["[[/LEAD]]", "</LEAD>"],
+    "story": ["[[/STORY]]", "</STORY>"],
+    "guide": ["[[/GUIDE]]", "</GUIDE>"],
+    "meta": ["[[/META]]", "</META>"],
 }
-MAX_OPEN_TAG_LEN = max(len(k) for k in OPEN_TAGS.keys())
-MAX_CLOSE_TAG_LEN = max(len(v) for v in CLOSE_TAGS.values())
+MAX_TAG_LEN = max(
+    max(len(k) for k in OPEN_TAGS.keys()),
+    max(len(v) for values in CLOSE_TAGS.values() for v in values),
+)
+MARKER_RE = re.compile(
+    r"\[\[(?:/?LEAD|/?STORY|/?GUIDE|/?META)\]\]|</?(?:LEAD|STORY|GUIDE|META)>"
+)
 
 
 def _compact_block(value: Any) -> str:
@@ -41,6 +52,7 @@ def _compact_block(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except Exception:
         return str(value)
+
 
 
 def extract_chunk_text(chunk: Any) -> str:
@@ -63,6 +75,7 @@ def extract_chunk_text(chunk: Any) -> str:
     return str(content or "")
 
 
+
 def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill: str):
     history_block = build_history_text(req)
     draft_story = (req.session_draft_content or "").strip()
@@ -79,6 +92,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 {build_skill_instruction(skill)}
 
 你现在必须按“标签协议”输出内容，不能输出 JSON 主体，不能输出 markdown，不能输出解释。
+
 你必须严格按照下面顺序输出：
 [[LEAD]]这里写承接语[[/LEAD]]
 [[STORY]]这里写故事正文[[/STORY]]
@@ -97,7 +111,8 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 9. end_chat 时只做礼貌收尾，不开启新情节。
 10. 在 bookchat 场景下，{story_reference_rules}
 11. 不要输出任何标签以外的额外文字。
-12. 所有标签必须闭合。
+12. 所有标签必须闭合；如果出错，请优先补齐闭合标签，而不是输出解释。
+13. 不要重复输出标签名，不要把 [[STORY]]、[[GUIDE]]、[[META]] 当正文内容输出。
 
 当前 scene：{req.scene}
 当前 intent：{intent}
@@ -131,6 +146,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
     return system, user
 
 
+
 def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
     meta_text = (meta_text or "").strip()
     data: Dict[str, Any] = {}
@@ -160,10 +176,16 @@ def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
     }
 
 
+
+def _strip_protocol_markers(text: str) -> str:
+    return MARKER_RE.sub("", text or "")
+
+
 class TagStreamParser:
     def __init__(self, emit):
         self.emit = emit
         self.buffer = ""
+        self.raw_output = ""
         self.current_section: Optional[str] = None
         self.lead_text = ""
         self.story_text = ""
@@ -174,64 +196,14 @@ class TagStreamParser:
     async def feed(self, text: str):
         if not text:
             return
+        self.raw_output += text
         self.buffer += text
         await self._drain()
 
     async def finalize(self):
         await self._drain(final=True)
 
-    async def _drain(self, final: bool = False):
-        while True:
-            if self.current_section is None:
-                matched = self._find_next_open_tag()
-                if matched is None:
-                    keep = MAX_OPEN_TAG_LEN - 1
-                    if final:
-                        self.buffer = ""
-                    elif len(self.buffer) > keep:
-                        self.buffer = self.buffer[-keep:]
-                    return
-
-                prefix, tag_text, section = matched
-                # Drop anything before the next valid tag.
-                self.buffer = self.buffer[len(prefix):]
-                self.buffer = self.buffer[len(tag_text):]
-                self.current_section = section
-                if section in ("lead", "story", "guide") and section not in self.started_sections:
-                    self.started_sections.add(section)
-                    await self.emit({"type": "section_start", "section": section})
-                continue
-
-            close_tag = CLOSE_TAGS[self.current_section]
-            idx = self.buffer.find(close_tag)
-            if idx != -1:
-                content = self.buffer[:idx]
-                if content:
-                    await self._append_and_emit(self.current_section, content)
-                self.buffer = self.buffer[idx + len(close_tag):]
-                self.current_section = None
-                continue
-
-            keep = len(close_tag) - 1
-            if final:
-                # At finalize, flush plain content but do not fabricate missing close tags.
-                content = self.buffer
-                if content:
-                    await self._append_and_emit(self.current_section, content)
-                self.buffer = ""
-                self.current_section = None
-                return
-
-            if len(self.buffer) > keep:
-                safe_text = self.buffer[:-keep]
-                self.buffer = self.buffer[-keep:]
-                if safe_text:
-                    await self._append_and_emit(self.current_section, safe_text)
-                continue
-
-            return
-
-    def _find_next_open_tag(self):
+    def _find_next_open_tag(self) -> Optional[Tuple[str, str, str]]:
         best_idx = None
         best_tag_text = None
         best_section = None
@@ -241,14 +213,31 @@ class TagStreamParser:
                 best_idx = idx
                 best_tag_text = tag_text
                 best_section = section
-
         if best_idx is None:
             return None
-
         prefix = self.buffer[:best_idx]
         return prefix, best_tag_text, best_section
 
+    def _find_next_boundary(self, section: str):
+        best = None  # (idx, kind, token, next_section)
+        for close_tag in CLOSE_TAGS[section]:
+            idx = self.buffer.find(close_tag)
+            if idx != -1 and (best is None or idx < best[0]):
+                best = (idx, "close", close_tag, None)
+        for open_tag, next_section in OPEN_TAGS.items():
+            idx = self.buffer.find(open_tag)
+            if idx != -1 and (best is None or idx < best[0]):
+                best = (idx, "open", open_tag, next_section)
+        return best
+
+    async def _start_section(self, section: str):
+        self.current_section = section
+        if section in ("lead", "story", "guide") and section not in self.started_sections:
+            self.started_sections.add(section)
+            await self.emit({"type": "section_start", "section": section})
+
     async def _append_and_emit(self, section: str, text: str):
+        text = _strip_protocol_markers(text)
         if not text:
             return
         if section == "lead":
@@ -265,6 +254,95 @@ class TagStreamParser:
             return
         if section == "meta":
             self.meta_text += text
+
+    async def _drain(self, final: bool = False):
+        while True:
+            if self.current_section is None:
+                matched = self._find_next_open_tag()
+                if matched is None:
+                    keep = MAX_TAG_LEN - 1
+                    if final:
+                        self.buffer = ""
+                    elif len(self.buffer) > keep:
+                        self.buffer = self.buffer[-keep:]
+                    return
+
+                prefix, tag_text, section = matched
+                # Drop anything before the next valid tag. It is malformed protocol noise.
+                self.buffer = self.buffer[len(prefix):]
+                self.buffer = self.buffer[len(tag_text):]
+                await self._start_section(section)
+                continue
+
+            boundary = self._find_next_boundary(self.current_section)
+            if boundary is None:
+                keep = MAX_TAG_LEN - 1
+                if final:
+                    content = self.buffer
+                    if content:
+                        await self._append_and_emit(self.current_section, content)
+                    self.buffer = ""
+                    self.current_section = None
+                    return
+                if len(self.buffer) > keep:
+                    safe_text = self.buffer[:-keep]
+                    self.buffer = self.buffer[-keep:]
+                    if safe_text:
+                        await self._append_and_emit(self.current_section, safe_text)
+                    continue
+                return
+
+            idx, kind, token, next_section = boundary
+            content = self.buffer[:idx]
+            if content:
+                await self._append_and_emit(self.current_section, content)
+
+            self.buffer = self.buffer[idx + len(token):]
+
+            if kind == "close":
+                self.current_section = None
+                continue
+
+            # A new open tag appeared before the current section's close tag.
+            # Treat it as malformed-but-recoverable output: implicitly close the
+            # current section and switch to the new one instead of leaking markers.
+            self.current_section = None
+            await self._start_section(next_section)
+            continue
+
+
+
+def _regex_extract_section(raw_text: str, section: str) -> str:
+    patterns = {
+        "lead": [r"\[\[LEAD\]\](.*?)\[\[/LEAD\]\]", r"<LEAD>(.*?)</LEAD>"],
+        "story": [r"\[\[STORY\]\](.*?)\[\[/STORY\]\]", r"<STORY>(.*?)</STORY>"],
+        "guide": [r"\[\[GUIDE\]\](.*?)\[\[/GUIDE\]\]", r"<GUIDE>(.*?)</GUIDE>"],
+        "meta": [r"\[\[META\]\](.*?)\[\[/META\]\]", r"<META>(.*?)</META>"],
+    }
+    for p in patterns[section]:
+        m = re.search(p, raw_text, flags=re.DOTALL)
+        if m:
+            return _strip_protocol_markers(m.group(1)).strip()
+    return ""
+
+
+
+def _salvage_if_needed(parser: TagStreamParser):
+    if not parser.raw_output:
+        return
+    if not parser.lead_text:
+        parser.lead_text = _regex_extract_section(parser.raw_output, "lead")
+    if not parser.story_text:
+        parser.story_text = _regex_extract_section(parser.raw_output, "story")
+    if not parser.guide_text:
+        parser.guide_text = _regex_extract_section(parser.raw_output, "guide")
+    if not parser.meta_text:
+        parser.meta_text = _regex_extract_section(parser.raw_output, "meta")
+    parser.lead_text = _strip_protocol_markers(parser.lead_text).strip()
+    parser.story_text = _strip_protocol_markers(parser.story_text).strip()
+    parser.guide_text = _strip_protocol_markers(parser.guide_text).strip()
+    parser.meta_text = _strip_protocol_markers(parser.meta_text).strip()
+
 
 
 def _post_process_stream_result(intent: str, result: ChatResponse) -> ChatResponse:
@@ -299,8 +377,9 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
             await parser.feed(delta_text)
 
     await parser.finalize()
-    meta = normalize_stream_meta(parser.meta_text, intent)
+    _salvage_if_needed(parser)
 
+    meta = normalize_stream_meta(parser.meta_text, intent)
     result = ChatResponse(
         intent=intent,
         lead_text=parser.lead_text.strip(),
