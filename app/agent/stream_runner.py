@@ -1,4 +1,3 @@
-\
 import json
 from typing import Any, Dict, Optional
 
@@ -16,17 +15,18 @@ from app.agent.runner import (
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.rule_service import normalize_age_group
 
+# Avoid XML/HTML-like tags. They are brittle in prompts, logs, and tool-generated code.
 OPEN_TAGS = {
-    "<LEAD>": "lead",
-    "<STORY>": "story",
-    "<GUIDE>": "guide",
-    "<META>": "meta",
+    "[[LEAD]]": "lead",
+    "[[STORY]]": "story",
+    "[[GUIDE]]": "guide",
+    "[[META]]": "meta",
 }
 CLOSE_TAGS = {
-    "lead": "</LEAD>",
-    "story": "</STORY>",
-    "guide": "</GUIDE>",
-    "meta": "</META>",
+    "lead": "[[/LEAD]]",
+    "story": "[[/STORY]]",
+    "guide": "[[/GUIDE]]",
+    "meta": "[[/META]]",
 }
 MAX_OPEN_TAG_LEN = max(len(k) for k in OPEN_TAGS.keys())
 MAX_CLOSE_TAG_LEN = max(len(v) for v in CLOSE_TAGS.values())
@@ -77,13 +77,13 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 
 技能说明：
 {build_skill_instruction(skill)}
+
 你现在必须按“标签协议”输出内容，不能输出 JSON 主体，不能输出 markdown，不能输出解释。
 你必须严格按照下面顺序输出：
-
-<LEAD>这里写承接语</LEAD>
-<STORY>这里写故事正文</STORY>
-<GUIDE>这里写下一步引导</GUIDE>
-<META>{{"choices":["选项1","选项2","选项3"],"should_save":true,"save_mode":"append"}}</META>
+[[LEAD]]这里写承接语[[/LEAD]]
+[[STORY]]这里写故事正文[[/STORY]]
+[[GUIDE]]这里写下一步引导[[/GUIDE]]
+[[META]]{{"choices":["选项1","选项2","选项3"],"should_save":true,"save_mode":"append"}}[[/META]]
 
 硬性要求：
 1. 内容适合 {req.age} 岁儿童，年龄档为 {normalize_age_group(req.age)}。
@@ -93,7 +93,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 5. story 只能写故事正文，不能把解释、提示、选项写进 story。
 6. guide 只负责自然引导下一步。
 7. META 中只能有：choices / should_save / save_mode。
-8. ask_about_story、unsafety、end_chat 时，<STORY></STORY> 必须为空。
+8. ask_about_story、unsafety、end_chat 时，story 必须为空。
 9. end_chat 时只做礼貌收尾，不开启新情节。
 10. 在 bookchat 场景下，{story_reference_rules}
 11. 不要输出任何标签以外的额外文字。
@@ -127,6 +127,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 〖工具结果〗
 {tool_result}
 """.strip()
+
     return system, user
 
 
@@ -192,10 +193,10 @@ class TagStreamParser:
                     return
 
                 prefix, tag_text, section = matched
+                # Drop anything before the next valid tag.
                 self.buffer = self.buffer[len(prefix):]
                 self.buffer = self.buffer[len(tag_text):]
                 self.current_section = section
-
                 if section in ("lead", "story", "guide") and section not in self.started_sections:
                     self.started_sections.add(section)
                     await self.emit({"type": "section_start", "section": section})
@@ -213,6 +214,7 @@ class TagStreamParser:
 
             keep = len(close_tag) - 1
             if final:
+                # At finalize, flush plain content but do not fabricate missing close tags.
                 content = self.buffer
                 if content:
                     await self._append_and_emit(self.current_section, content)
@@ -226,6 +228,7 @@ class TagStreamParser:
                 if safe_text:
                     await self._append_and_emit(self.current_section, safe_text)
                 continue
+
             return
 
     def _find_next_open_tag(self):
@@ -238,8 +241,10 @@ class TagStreamParser:
                 best_idx = idx
                 best_tag_text = tag_text
                 best_section = section
+
         if best_idx is None:
             return None
+
         prefix = self.buffer[:best_idx]
         return prefix, best_tag_text, best_section
 
@@ -284,6 +289,7 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
 
     tool_result = call_tool_by_intent(req, intent)
     system, user = build_stream_messages(req, intent, tool_result, skill)
+
     llm = get_chat_model()
     parser = TagStreamParser(emit)
 
@@ -304,7 +310,6 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
         should_save=meta["should_save"],
         save_mode=meta["save_mode"],
     )
-
     result = _post_process_stream_result(intent, result)
     result, guard = evaluate_and_maybe_rewrite(req, result)
 
@@ -315,11 +320,13 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
     if result.story_text != parser.story_text.strip():
         await emit({"type": "section_replace", "section": "story", "content": result.story_text})
 
-    await emit({
-        "type": "meta",
-        "choices": result.choices,
-        "should_save": result.should_save,
-        "save_mode": result.save_mode,
-    })
+    await emit(
+        {
+            "type": "meta",
+            "choices": result.choices,
+            "should_save": result.should_save,
+            "save_mode": result.save_mode,
+        }
+    )
     await emit({"type": "done"})
     return result
