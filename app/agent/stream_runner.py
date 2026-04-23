@@ -6,6 +6,8 @@ from app.agent.llm import get_chat_model
 from app.agent.runner import (
     build_history_text,
     build_skill_instruction,
+    build_story_reference_block,
+    build_story_reference_rules,
     call_tool_by_intent,
     evaluate_and_maybe_rewrite,
     fill_default_choices,
@@ -56,11 +58,12 @@ def extract_chunk_text(chunk: Any) -> str:
 
 def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill: str):
     history_block = build_history_text(req)
-    current_story = (req.current_story_content or "").strip()
     draft_story = (req.session_draft_content or "").strip()
     story_spec = req.story_spec or {}
     story_state = req.story_state or {}
     story_summary = req.story_summary or {}
+    story_reference_block = build_story_reference_block(req)
+    story_reference_rules = build_story_reference_rules(req)
 
     system = f"""
 你是儿童故事共创助手，也是一个受控技能节点。
@@ -95,7 +98,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 7. META 中只能有：choices / should_save / save_mode。
 8. ask_about_story、unsafety、end_chat 时，<STORY></STORY> 必须为空。
 9. end_chat 时只做礼貌收尾，不开启新情节。
-10. 在 bookchat 场景下，优先依据 story_spec、story_state、story_summary、当前正式正文和本次会话草稿；历史记录只作补充参考。
+10. 在 bookchat 场景下，{story_reference_rules}
 11. 不要输出任何标签以外的额外文字。
 12. 所有标签必须闭合。
 
@@ -116,8 +119,7 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 【story_summary（压缩摘要）】
 {story_summary}
 
-【当前正式正文（最高优先级）】
-{current_story if current_story else '无'}
+{story_reference_block}
 
 【本次会话草稿（第二优先级）】
 {draft_story if draft_story else '无'}

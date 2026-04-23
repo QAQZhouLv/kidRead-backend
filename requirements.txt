@@ -34,6 +34,7 @@ openai==2.29.0
 orjson==3.11.7
 ormsgpack==1.12.2
 packaging==26.0
+pillow==11.2.1
 propcache==0.4.1
 pydantic==2.12.5
 pydantic_core==2.41.5
@@ -59,4 +60,3 @@ websockets==16.0
 xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
-pillow==11.2.1

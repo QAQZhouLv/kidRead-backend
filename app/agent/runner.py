@@ -43,6 +43,37 @@ def build_history_text(req: ChatRequest) -> str:
     return "\n".join(lines) if lines else "无"
 
 
+
+
+def build_story_reference_block(req: ChatRequest) -> str:
+    summary = req.story_summary or {}
+    current_story = (req.current_story_content or "").strip()
+
+    if isinstance(summary, dict) and summary.get("_context_mode") == "fast":
+        return f"""〖当前故事参考块（快速上下文，不是全文）〗
+- 压缩摘要：{summary.get('summary_short') or '无'}
+- 最近片段：{summary.get('last_excerpt') or '无'}
+- 命中片段数：{summary.get('_hit_count', 0)}
+- 当前参考正文：{current_story if current_story else '无'}""".strip()
+
+    return f"""〖当前正式正文〗
+{current_story if current_story else '无'}""".strip()
+
+
+def build_story_reference_rules(req: ChatRequest) -> str:
+    summary = req.story_summary or {}
+    if isinstance(summary, dict) and summary.get("_context_mode") == "fast":
+        hit_count = summary.get("_hit_count", 0)
+        return f"""
+快速上下文使用规则：
+1. 先看 story_spec、story_state、story_summary。
+2. 再看“当前故事参考块”，其中命中片段优先于最近片段。
+3. 如果用户在追问精确事实，但当前参考块证据不足（当前命中片段数={hit_count}），不要编造；应自然说明当前依据不足，并引导用户换个问法或继续写。
+4. 续写时，可以在不违背 story_spec、story_state、story_summary 的前提下承接最近片段自然推进。
+""".strip()
+
+    return "优先依据当前正式正文、story_spec、story_state、story_summary 和会话草稿；历史聊天只作补充。"
+
 def build_skill_instruction(skill: str) -> str:
     return SKILL_HINTS.get(skill, SKILL_HINTS["continue"])
 
@@ -63,11 +94,12 @@ def call_tool_by_intent(req: ChatRequest, intent: str) -> str:
 
 def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, skill: str):
     history_block = build_history_text(req)
-    current_story = (req.current_story_content or "").strip()
     draft_story = (req.session_draft_content or "").strip()
     story_spec = req.story_spec or {}
     story_state = req.story_state or {}
     story_summary = req.story_summary or {}
+    story_reference_block = build_story_reference_block(req)
+    story_reference_rules = build_story_reference_rules(req)
 
     system = f"""
 你是儿童故事共创助手，也是一个受控技能节点。
@@ -81,7 +113,7 @@ def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, s
 1. 内容适合 {req.age} 岁儿童，年龄档为 {normalize_age_group(req.age)}。
 2. 语言温和、具体、易理解。
 3. 必须保持角色、称呼、设定、情节前后连贯。
-4. 在 bookchat 场景下，优先依据正式正文、story_spec、story_state、story_summary 和会话草稿；历史聊天只作补充。
+4. 在 bookchat 场景下，{story_reference_rules}
 5. 不要把解释、选项、提示混进 story_text。
 6. 用户若明确表示结束，不再继续正文。
 
@@ -112,8 +144,7 @@ def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, s
 〖story_summary（压缩摘要）〗
 {story_summary}
 
-〖当前正式正文〗
-{current_story if current_story else '无'}
+{story_reference_block}
 
 〖本次会话草稿〗
 {draft_story if draft_story else '无'}

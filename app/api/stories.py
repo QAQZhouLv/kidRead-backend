@@ -11,9 +11,9 @@ from app.models.user import User
 from app.schemas.story import StoryAppendRequest, StoryCreate
 from app.services.cover_service import finalize_story_assets
 from app.services.story_service import append_story_content, create_story as service_create_story, get_story as service_get_story
+from app.services.story_vector_sync_service import delete_story_vectors_task, sync_story_vectors_task
 
 router = APIRouter(prefix="/api/stories", tags=["stories"])
-
 
 
 def get_db():
@@ -30,7 +30,6 @@ class StoryRenameRequest(BaseModel):
 
 class StoryFavoriteRequest(BaseModel):
     is_favorite: bool
-
 
 
 def story_to_dict(story: Story):
@@ -54,7 +53,6 @@ def story_to_dict(story: Story):
     }
 
 
-
 def get_current_user_dep(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
@@ -69,10 +67,8 @@ def list_stories(
     current_user: User = Depends(get_current_user_dep),
 ):
     query = db.query(Story).filter(Story.user_id == current_user.id)
-
     if not include_deleted:
         query = query.filter(Story.is_deleted == False)
-
     stories = query.order_by(Story.updated_at.desc()).all()
     return [story_to_dict(s) for s in stories]
 
@@ -88,14 +84,11 @@ def get_story(
         Story.id == story_id,
         Story.user_id == current_user.id,
     )
-
     if not include_deleted:
         query = query.filter(Story.is_deleted == False)
-
     story = query.first()
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
-
     return story_to_dict(story)
 
 
@@ -111,8 +104,8 @@ def create_story_api(
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
     story = service_create_story(db, data, user_id=current_user.id)
-
     background_tasks.add_task(finalize_story_assets, story.id)
+    background_tasks.add_task(sync_story_vectors_task, story.id)
     return story_to_dict(story)
 
 
@@ -137,6 +130,7 @@ def append_story_api(
         raise HTTPException(status_code=404, detail="Story not found")
 
     background_tasks.add_task(finalize_story_assets, story.id)
+    background_tasks.add_task(sync_story_vectors_task, story.id)
     return story_to_dict(story)
 
 
@@ -166,10 +160,8 @@ def rename_story(
     story.title = new_title
     story.title_source = "manual"
     story.updated_at = datetime.utcnow()
-
     db.commit()
     db.refresh(story)
-
     return {"ok": True, "id": story.id, "title": story.title}
 
 
@@ -194,16 +186,15 @@ def update_story_favorite(
 
     story.is_favorite = bool(payload.is_favorite)
     story.updated_at = datetime.utcnow()
-
     db.commit()
     db.refresh(story)
-
     return {"ok": True, "id": story.id, "is_favorite": bool(story.is_favorite)}
 
 
 @router.delete("/{story_id}")
 def soft_delete_story(
     story_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_dep),
 ):
@@ -222,10 +213,10 @@ def soft_delete_story(
     story.is_deleted = True
     story.deleted_at = datetime.utcnow()
     story.updated_at = datetime.utcnow()
-
     db.commit()
     db.refresh(story)
 
+    background_tasks.add_task(delete_story_vectors_task, story_id)
     return {
         "ok": True,
         "id": story_id,
