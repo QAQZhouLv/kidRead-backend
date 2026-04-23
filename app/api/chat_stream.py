@@ -13,10 +13,55 @@ from app.services.session_service import auto_title_session_if_needed
 router = APIRouter(tags=["chat-stream"])
 
 
+def _join_assistant_text(*parts: str) -> str:
+    clean_parts = [str(part or "").strip() for part in parts if str(part or "").strip()]
+    return "\n".join(clean_parts)
+
+
+def _build_side_effect_payloads(req: ChatRequest, result, user_id: int) -> tuple[dict, dict]:
+    assistant_text = _join_assistant_text(result.lead_text, result.story_text, result.guide_text)
+    context_payload = {
+        "session_id": req.session_id,
+        "snapshot": getattr(result, "_context_snapshot", {}) or {},
+        "guard_result": getattr(result, "_guard_result", None),
+        "user_id": user_id,
+    }
+    title_payload = {
+        "session_id": req.session_id,
+        "user_text": req.text,
+        "assistant_text": assistant_text,
+        "user_id": user_id,
+    }
+    return title_payload, context_payload
+
+
+def _run_side_effects_inline(db, *, req: ChatRequest, result, user_id: int) -> None:
+    title_payload, context_payload = _build_side_effect_payloads(req, result, user_id)
+    auto_title_session_if_needed(
+        db=db,
+        user_id=user_id,
+        session_id=req.session_id,
+        user_text=title_payload["user_text"],
+        assistant_text=title_payload["assistant_text"],
+    )
+    update_session_context_snapshot(
+        db=db,
+        session_id=req.session_id,
+        snapshot=context_payload["snapshot"],
+        guard_result=context_payload["guard_result"],
+        user_id=user_id,
+    )
+
+
+def _enqueue_side_effects(runtime, *, req: ChatRequest, result, user_id: int) -> None:
+    title_payload, context_payload = _build_side_effect_payloads(req, result, user_id)
+    runtime.task_queue.enqueue("auto_title_session", title_payload)
+    runtime.task_queue.enqueue("update_context_snapshot", context_payload)
+
+
 @router.websocket("/ws/chat/stream")
 async def chat_stream(websocket: WebSocket):
     db = SessionLocal()
-
     try:
         current_user = get_current_user_from_ws(db, websocket)
     except AuthError as exc:
@@ -27,6 +72,7 @@ async def chat_stream(websocket: WebSocket):
         return
 
     await websocket.accept()
+    runtime = build_runtime(db)
 
     async def emit(payload):
         await websocket.send_text(json.dumps(payload, ensure_ascii=False))
@@ -36,7 +82,6 @@ async def chat_stream(websocket: WebSocket):
             raw = await websocket.receive_text()
             data = json.loads(raw)
             req = ChatRequest(**data)
-            runtime = build_runtime(db)
 
             runtime.message_repo.create_user_message(
                 user_id=current_user.id,
@@ -62,38 +107,10 @@ async def chat_stream(websocket: WebSocket):
                 should_save=result.should_save,
             )
 
-            assistant_text = "\n".join([result.lead_text, result.story_text, result.guide_text])
-            context_payload = {
-                "session_id": req.session_id,
-                "snapshot": getattr(result, "_context_snapshot", {}) or {},
-                "guard_result": getattr(result, "_guard_result", None),
-                "user_id": current_user.id,
-            }
-            title_payload = {
-                "session_id": req.session_id,
-                "user_text": req.text,
-                "assistant_text": assistant_text,
-                "user_id": current_user.id,
-            }
-
             if runtime.flags.use_async_side_effects:
-                runtime.task_queue.enqueue("auto_title_session", title_payload)
-                runtime.task_queue.enqueue("update_context_snapshot", context_payload)
+                _enqueue_side_effects(runtime, req=req, result=result, user_id=current_user.id)
             else:
-                auto_title_session_if_needed(
-                    db=db,
-                    user_id=current_user.id,
-                    session_id=req.session_id,
-                    user_text=req.text,
-                    assistant_text=assistant_text,
-                )
-                update_session_context_snapshot(
-                    db=db,
-                    session_id=req.session_id,
-                    snapshot=context_payload["snapshot"],
-                    guard_result=context_payload["guard_result"],
-                    user_id=current_user.id,
-                )
+                _run_side_effects_inline(db, req=req, result=result, user_id=current_user.id)
 
     except WebSocketDisconnect:
         pass

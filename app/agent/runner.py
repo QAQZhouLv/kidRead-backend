@@ -1,3 +1,8 @@
+\
+import json
+import re
+from typing import Any
+
 from app.agent.graph import prepare_chat_state
 from app.agent.json_utils import extract_json_block, normalize_response_dict, to_schema
 from app.agent.llm import get_chat_model, get_json_model
@@ -13,7 +18,6 @@ from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.content_guard import build_rewrite_instruction, evaluate_content
 from app.services.rule_service import normalize_age_group
 
-
 SKILL_HINTS = {
     "create": "你在 create 场景里负责从零开始共创故事。应优先建立角色、场景、目标和第一步推进。",
     "continue": "你负责在现有设定上继续推进情节。必须承接已有正文和会话草稿，不能像重新开题。",
@@ -23,10 +27,23 @@ SKILL_HINTS = {
     "end": "你负责礼貌收尾，不新增正文，不开启新情节。",
 }
 
+STRUCTURAL_RISK_TAGS = {"too_many_paragraphs", "too_many_sentences"}
+
+
+def _compact_block(value: Any) -> str:
+    if value is None:
+        return "无"
+    if isinstance(value, str):
+        return value or "无"
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return str(value)
+
 
 def build_history_text(req: ChatRequest) -> str:
     lines = []
-    for item in (req.history or [])[-8:]:
+    for item in (req.history or [])[-6:]:
         if item.role == "user":
             lines.append(f"用户：{item.text or ''}")
         else:
@@ -43,19 +60,15 @@ def build_history_text(req: ChatRequest) -> str:
     return "\n".join(lines) if lines else "无"
 
 
-
-
 def build_story_reference_block(req: ChatRequest) -> str:
     summary = req.story_summary or {}
     current_story = (req.current_story_content or "").strip()
-
     if isinstance(summary, dict) and summary.get("_context_mode") == "fast":
         return f"""〖当前故事参考块（快速上下文，不是全文）〗
 - 压缩摘要：{summary.get('summary_short') or '无'}
 - 最近片段：{summary.get('last_excerpt') or '无'}
 - 命中片段数：{summary.get('_hit_count', 0)}
 - 当前参考正文：{current_story if current_story else '无'}""".strip()
-
     return f"""〖当前正式正文〗
 {current_story if current_story else '无'}""".strip()
 
@@ -71,8 +84,8 @@ def build_story_reference_rules(req: ChatRequest) -> str:
 3. 如果用户在追问精确事实，但当前参考块证据不足（当前命中片段数={hit_count}），不要编造；应自然说明当前依据不足，并引导用户换个问法或继续写。
 4. 续写时，可以在不违背 story_spec、story_state、story_summary 的前提下承接最近片段自然推进。
 """.strip()
-
     return "优先依据当前正式正文、story_spec、story_state、story_summary 和会话草稿；历史聊天只作补充。"
+
 
 def build_skill_instruction(skill: str) -> str:
     return SKILL_HINTS.get(skill, SKILL_HINTS["continue"])
@@ -106,7 +119,6 @@ def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, s
 
 技能说明：
 {build_skill_instruction(skill)}
-
 你必须输出一个严格符合 ChatResponse 结构的结果。
 
 总要求：
@@ -136,13 +148,13 @@ def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, s
 {req.text}
 
 〖story_spec（静态设定）〗
-{story_spec}
+{_compact_block(story_spec)}
 
 〖story_state（动态剧情台账）〗
-{story_state}
+{_compact_block(story_state)}
 
 〖story_summary（压缩摘要）〗
-{story_summary}
+{_compact_block(story_summary)}
 
 {story_reference_block}
 
@@ -155,14 +167,12 @@ def build_structured_messages(req: ChatRequest, intent: str, tool_result: str, s
 〖工具结果〗
 {tool_result}
 """.strip()
-
     return system, user
 
 
 def build_json_fallback_messages(req: ChatRequest, intent: str, tool_result: str, skill: str):
     system, user = build_structured_messages(req, intent, tool_result, skill)
     system += """
-
 你只能输出 JSON。
 不要输出 markdown，不要输出解释，不要输出额外文字。
 JSON 必须严格符合 ChatResponse。
@@ -185,14 +195,11 @@ def fill_default_choices(intent: str):
 def post_process_result(result: ChatResponse, intent: str) -> ChatResponse:
     result.intent = intent
     result.save_mode = "append"
-
     if intent in ("ask_about_story", "unsafety", "end_chat"):
         result.story_text = ""
         result.should_save = False
-
     if not result.choices:
         result.choices = fill_default_choices(intent)
-
     result.choices = result.choices[:4]
     return result
 
@@ -205,6 +212,7 @@ def _rewrite_story_text(req: ChatRequest, story_text: str, guard: dict) -> str:
 必须保留核心情节方向，但语言更简单、句子更短、氛围更温和。
 只输出改写后的故事正文，不要输出解释。
 """.strip()
+
     user = f"""
 原正文：
 {story_text}
@@ -212,9 +220,30 @@ def _rewrite_story_text(req: ChatRequest, story_text: str, guard: dict) -> str:
 改写要求：
 {build_rewrite_instruction(guard)}
 """.strip()
+
     rewritten = llm.invoke([("system", system), ("user", user)])
     content = rewritten.content if hasattr(rewritten, "content") else str(rewritten)
     return content.strip()
+
+
+def _split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[。！？!?])\s*", text.strip())
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+def _fast_structural_rewrite_story_text(req: ChatRequest, story_text: str, guard: dict) -> str | None:
+    risk_tags = set(guard.get("risk_tags") or [])
+    if not risk_tags or not risk_tags.issubset(STRUCTURAL_RISK_TAGS):
+        return None
+
+    max_sentences = 5 if req.age <= 6 else 7
+    sentences = _split_sentences(story_text)
+    if not sentences:
+        return story_text.strip()
+
+    trimmed = sentences[:max_sentences]
+    compact = "".join(trimmed).strip()
+    return compact or story_text.strip()
 
 
 def evaluate_and_maybe_rewrite(req: ChatRequest, result: ChatResponse):
@@ -229,11 +258,21 @@ def evaluate_and_maybe_rewrite(req: ChatRequest, result: ChatResponse):
     if guard["passed"] or not guard["need_rewrite"]:
         return result, guard
 
+    fast_rewritten_story = _fast_structural_rewrite_story_text(req, result.story_text, guard)
+    if fast_rewritten_story is not None:
+        result.story_text = fast_rewritten_story
+        final_guard = evaluate_content(req.age, difficulty_level, result.story_text)
+        final_guard["rewritten"] = True
+        final_guard["rewrite_mode"] = "local_fast"
+        final_guard["original_risk_tags"] = guard.get("risk_tags", [])
+        return result, final_guard
+
     rewritten_story = _rewrite_story_text(req, result.story_text, guard)
     result.story_text = rewritten_story
 
     final_guard = evaluate_content(req.age, difficulty_level, result.story_text)
     final_guard["rewritten"] = True
+    final_guard["rewrite_mode"] = "llm"
     final_guard["original_risk_tags"] = guard.get("risk_tags", [])
     return result, final_guard
 
@@ -251,6 +290,7 @@ def _invoke_json_fallback(req: ChatRequest, intent: str, tool_result: str, skill
     system, user = build_json_fallback_messages(req, intent, tool_result, skill)
     raw = json_llm.invoke([("system", system), ("user", user)])
     content = raw.content if hasattr(raw, "content") else str(raw)
+
     data = extract_json_block(content)
     data = normalize_response_dict(data)
     data["intent"] = intent
@@ -261,7 +301,6 @@ def _invoke_json_fallback(req: ChatRequest, intent: str, tool_result: str, skill
 
     if not data.get("choices"):
         data["choices"] = fill_default_choices(intent)
-
     return to_schema(ChatResponse, data)
 
 
@@ -283,7 +322,9 @@ def run_story_agent(req: ChatRequest, *, user_id: int | None = None) -> ChatResp
 
     result = post_process_result(result, intent)
     result, guard = evaluate_and_maybe_rewrite(req, result)
+
+    object.__setattr__(result, "_context_snapshot", prepared.get("snapshot") or {})
     if guard is not None:
         object.__setattr__(result, "_guard_result", guard)
-    object.__setattr__(result, "_context_snapshot", prepared.get("snapshot") or {})
+
     return result

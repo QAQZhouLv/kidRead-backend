@@ -1,3 +1,4 @@
+\
 import json
 from typing import Any, Dict, Optional
 
@@ -21,26 +22,33 @@ OPEN_TAGS = {
     "<GUIDE>": "guide",
     "<META>": "meta",
 }
-
 CLOSE_TAGS = {
     "lead": "</LEAD>",
     "story": "</STORY>",
     "guide": "</GUIDE>",
     "meta": "</META>",
 }
-
 MAX_OPEN_TAG_LEN = max(len(k) for k in OPEN_TAGS.keys())
 MAX_CLOSE_TAG_LEN = max(len(v) for v in CLOSE_TAGS.values())
+
+
+def _compact_block(value: Any) -> str:
+    if value is None:
+        return "无"
+    if isinstance(value, str):
+        return value or "无"
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return str(value)
 
 
 def extract_chunk_text(chunk: Any) -> str:
     if chunk is None:
         return ""
-
     content = getattr(chunk, "content", None)
     if isinstance(content, str):
         return content
-
     if isinstance(content, list):
         parts = []
         for item in content:
@@ -52,7 +60,6 @@ def extract_chunk_text(chunk: Any) -> str:
                 elif "text" in item:
                     parts.append(str(item.get("text", "")))
         return "".join(parts)
-
     return str(content or "")
 
 
@@ -70,23 +77,13 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 
 技能说明：
 {build_skill_instruction(skill)}
-
 你现在必须按“标签协议”输出内容，不能输出 JSON 主体，不能输出 markdown，不能输出解释。
-
 你必须严格按照下面顺序输出：
 
-<LEAD>
-这里写承接语
-</LEAD>
-<STORY>
-这里写故事正文
-</STORY>
-<GUIDE>
-这里写下一步引导
-</GUIDE>
-<META>
-{{"choices":["选项1","选项2","选项3"],"should_save":true,"save_mode":"append"}}
-</META>
+<LEAD>这里写承接语</LEAD>
+<STORY>这里写故事正文</STORY>
+<GUIDE>这里写下一步引导</GUIDE>
+<META>{{"choices":["选项1","选项2","选项3"],"should_save":true,"save_mode":"append"}}</META>
 
 硬性要求：
 1. 内容适合 {req.age} 岁儿童，年龄档为 {normalize_age_group(req.age)}。
@@ -107,30 +104,29 @@ def build_stream_messages(req: ChatRequest, intent: str, tool_result: str, skill
 """.strip()
 
     user = f"""
-【用户本轮输入】
+〖用户本轮输入〗
 {req.text}
 
-【story_spec（静态设定）】
-{story_spec}
+〖story_spec（静态设定）〗
+{_compact_block(story_spec)}
 
-【story_state（动态剧情台账）】
-{story_state}
+〖story_state（动态剧情台账）〗
+{_compact_block(story_state)}
 
-【story_summary（压缩摘要）】
-{story_summary}
+〖story_summary（压缩摘要）〗
+{_compact_block(story_summary)}
 
 {story_reference_block}
 
-【本次会话草稿（第二优先级）】
+〖本次会话草稿（第二优先级）〗
 {draft_story if draft_story else '无'}
 
-【最近聊天记录（仅补充参考）】
+〖最近聊天记录（仅补充参考）〗
 {history_block}
 
-【工具结果】
+〖工具结果〗
 {tool_result}
 """.strip()
-
     return system, user
 
 
@@ -152,6 +148,7 @@ def normalize_stream_meta(meta_text: str, intent: str) -> Dict[str, Any]:
 
     should_save = bool(data.get("should_save", False))
     save_mode = str(data.get("save_mode", "append") or "append").strip() or "append"
+
     if intent in ("ask_about_story", "unsafety", "end_chat"):
         should_save = False
 
@@ -265,6 +262,18 @@ class TagStreamParser:
             self.meta_text += text
 
 
+def _post_process_stream_result(intent: str, result: ChatResponse) -> ChatResponse:
+    result.intent = intent
+    result.save_mode = result.save_mode or "append"
+    if intent in ("ask_about_story", "unsafety", "end_chat"):
+        result.story_text = ""
+        result.should_save = False
+    if not result.choices:
+        result.choices = fill_default_choices(intent)
+    result.choices = result.choices[:4]
+    return result
+
+
 async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None):
     prepared = prepare_chat_state(req, user_id=user_id)
     intent = prepared["intent"]
@@ -275,7 +284,6 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
 
     tool_result = call_tool_by_intent(req, intent)
     system, user = build_stream_messages(req, intent, tool_result, skill)
-
     llm = get_chat_model()
     parser = TagStreamParser(emit)
 
@@ -297,17 +305,15 @@ async def run_story_stream(req: ChatRequest, emit, *, user_id: int | None = None
         save_mode=meta["save_mode"],
     )
 
+    result = _post_process_stream_result(intent, result)
     result, guard = evaluate_and_maybe_rewrite(req, result)
+
+    object.__setattr__(result, "_context_snapshot", prepared.get("snapshot") or {})
     if guard is not None:
         object.__setattr__(result, "_guard_result", guard)
-    object.__setattr__(result, "_context_snapshot", prepared.get("snapshot") or {})
 
     if result.story_text != parser.story_text.strip():
         await emit({"type": "section_replace", "section": "story", "content": result.story_text})
-
-    if intent in ("ask_about_story", "unsafety", "end_chat"):
-        result.story_text = ""
-        result.should_save = False
 
     await emit({
         "type": "meta",
