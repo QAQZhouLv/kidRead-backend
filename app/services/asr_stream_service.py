@@ -151,6 +151,7 @@ class ASRStreamBridge:
         self._closed = False
         self._started = False
         self._done_event = asyncio.Event()
+        self._stop_requested = False
 
         self._last_partial_text = ""
         self._final_text = ""
@@ -192,6 +193,9 @@ class ASRStreamBridge:
                 code = data.get("code", -1)
                 if code != 0:
                     message = data.get("message", "unknown error")
+                    if code == 10165 and (self._closed or self._stop_requested or not self._started):
+                        self._done_event.set()
+                        break
                     raise RuntimeError(f"讯飞识别失败：code={code}, message={message}")
 
                 text = _extract_words(data)
@@ -284,9 +288,10 @@ class ASRStreamBridge:
             return
 
         self._closed = True
+        self._stop_requested = True
 
         try:
-            if self.ws:
+            if self.ws and self._started:
                 end_frame = {
                     "data": {
                         "status": 2,
@@ -296,12 +301,27 @@ class ASRStreamBridge:
                     }
                 }
                 await self.ws.send(json.dumps(end_frame, ensure_ascii=False))
+            else:
+                self._done_event.set()
+        except Exception:
+            self._done_event.set()
+
+        try:
+            await asyncio.wait_for(self._done_event.wait(), timeout=5.0)
         except Exception:
             pass
 
-        # 等待最终结果回来，最多等 5 秒
+        recv_err = None
         try:
-            await asyncio.wait_for(self._done_event.wait(), timeout=5.0)
+            if self._recv_task:
+                if not self._recv_task.done():
+                    self._recv_task.cancel()
+                try:
+                    await self._recv_task
+                except asyncio.CancelledError:
+                    pass
+                except RuntimeError as e:
+                    recv_err = e
         except Exception:
             pass
 
@@ -311,18 +331,14 @@ class ASRStreamBridge:
         except Exception:
             pass
 
-        # 如果接收任务还活着，清掉
-        try:
-            if self._recv_task and not self._recv_task.done():
-                self._recv_task.cancel()
-        except Exception:
-            pass
+        if recv_err and "invalid handle" not in str(recv_err):
+            raise recv_err
 
 
 async def _recognize_file_with_xfyun(file_bytes: bytes) -> str:
     """
     把整段文件作为“伪流式”发给讯飞，得到最终结果
-    这是对你旧版 /api/asr 逻辑的封装延续
+    这是对旧版 /api/asr 逻辑的封装延续
     """
     ws_url = build_xfyun_ws_url()
     final_text_parts = []
