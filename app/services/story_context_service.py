@@ -144,12 +144,16 @@ def pack_context_for_prompt(
         selected_content, fast_meta = build_fast_story_context(full_content, retrieved_chunks=retrieved_chunks)
         context_mode = "fast"
 
+    normalized_hits = _normalize_retrieved_chunks(retrieved_chunks)
     story_summary = {
         **story_summary,
         "_context_mode": context_mode,
         "_full_content_length": len(full_content),
         "_selected_content_length": len(selected_content or ""),
         "_hit_count": fast_meta.get("hit_count", 0),
+        "_retrieved_chunk_count": len(normalized_hits),
+        "_retrieved_chunks_preview": [chunk[:120] for chunk in normalized_hits],
+        "_retrieval_mode": "qdrant" if normalized_hits else ("qdrant_no_hit" if use_fast_context else "full"),
         "_query_text": query_text or "",
     }
 

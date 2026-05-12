@@ -23,6 +23,8 @@ class AuthLoginRequest(BaseModel):
     nickname: str | None = None
     avatar_url: str | None = None
     display_name: str | None = None
+    age: int | None = None
+    theme_preference: str | None = None
 
 
 @router.post("/login")
@@ -39,6 +41,8 @@ def login(payload: AuthLoginRequest, db: Session = Depends(get_db)):
             nickname=payload.nickname,
             avatar_url=payload.avatar_url,
             display_name=payload.display_name,
+            age=payload.age,
+            theme_preference=payload.theme_preference,
             auth_mode=auth_mode,
         )
         return build_login_response(user, auth_mode)

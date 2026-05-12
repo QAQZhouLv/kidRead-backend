@@ -62,6 +62,8 @@ def unified_chat(
                 guide_text=result.guide_text,
                 choices=result.choices,
                 should_save=result.should_save,
+                save_mode=result.save_mode,
+                raw_response=result.model_dump_json() if hasattr(result, "model_dump_json") else None,
             ),
             user_id=current_user.id,
         )

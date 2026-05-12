@@ -1,9 +1,29 @@
+import json
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.models.story import Story
 from app.schemas.story import StoryCreate, StoryUpdate
+from app.services.archive_story_service import generate_story_spec_and_state
 from app.services.rule_service import normalize_age_group
 from app.services.title_service import build_fast_story_title
+
+
+def _dump_json(value) -> str:
+    return json.dumps(value or {}, ensure_ascii=False)
+
+
+def _refresh_archived_context(db: Session, story: Story) -> Story:
+    spec, state, summary = generate_story_spec_and_state(story.age or 6, story.content or "")
+    story.story_spec = _dump_json(spec)
+    story.story_state = _dump_json(state)
+    story.story_summary = _dump_json(summary)
+    story.summary = summary.get("summary_short") if isinstance(summary, dict) else story.summary
+    story.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(story)
+    return story
 
 
 def create_story(db: Session, data: StoryCreate, *, user_id: int) -> Story:
@@ -28,24 +48,15 @@ def create_story(db: Session, data: StoryCreate, *, user_id: int) -> Story:
     db.add(story)
     db.commit()
     db.refresh(story)
-    return story
+    return _refresh_archived_context(db, story)
 
 
 def get_story(db: Session, story_id: int, *, user_id: int):
-    return (
-        db.query(Story)
-        .filter(Story.id == story_id, Story.user_id == user_id)
-        .first()
-    )
+    return db.query(Story).filter(Story.id == story_id, Story.user_id == user_id).first()
 
 
 def list_stories(db: Session, *, user_id: int):
-    return (
-        db.query(Story)
-        .filter(Story.user_id == user_id)
-        .order_by(Story.created_at.desc())
-        .all()
-    )
+    return db.query(Story).filter(Story.user_id == user_id).order_by(Story.created_at.desc()).all()
 
 
 def update_story(db: Session, story_id: int, data: StoryUpdate, *, user_id: int):
@@ -64,6 +75,7 @@ def update_story(db: Session, story_id: int, data: StoryUpdate, *, user_id: int)
         if value is not None:
             setattr(story, field, value)
 
+    story.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(story)
     return story
@@ -81,7 +93,7 @@ def append_story_content(db: Session, story_id: int, story_text: str, *, user_id
     if story.content and not story.content.endswith("\n"):
         story.content += "\n"
     story.content += clean_story_text
-
+    story.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(story)
-    return story
+    return _refresh_archived_context(db, story)

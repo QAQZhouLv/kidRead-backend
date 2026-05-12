@@ -26,6 +26,8 @@ class StoryMessageCreateAssistant(BaseModel):
     guide_text: str = ""
     choices: List[str] = []
     should_save: bool = False
+    save_mode: str = "append"
+    raw_response: Optional[str] = None
 
 
 class StoryMessageOut(BaseModel):
@@ -42,6 +44,8 @@ class StoryMessageOut(BaseModel):
     guide_text: Optional[str] = None
     choices: List[str] = []
     should_save: bool = False
+    save_mode: str = "append"
+    raw_response: Optional[str] = None
     created_at: datetime
 
     class Config:

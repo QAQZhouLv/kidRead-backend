@@ -1,5 +1,6 @@
 import json
 import uuid
+import logging
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = BASE_DIR / "static"
 COVERS_DIR = STATIC_DIR / "covers"
 COVERS_DIR.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger(__name__)
 
 
 def build_cover_prompt(story: Story) -> str:
@@ -44,6 +47,11 @@ def generate_ai_cover_for_story(story_id: int):
     try:
         story = db.query(Story).filter(Story.id == story_id).first()
         if not story:
+            return
+
+        logger.info("start generate_ai_cover_for_story story_id=%s", story_id)
+        if story.cover_image_url and story.cover_status == "ready":
+            logger.info("skip cover generation because ready cover already exists story_id=%s", story_id)
             return
 
         story.cover_status = "generating"
@@ -93,6 +101,7 @@ def generate_ai_cover_for_story(story_id: int):
                     image_url = results[0].get("url")
 
             if not image_url:
+                logger.error("cover generation returned no image url for story_id=%s response=%s", story_id, data)
                 story.cover_status = "failed"
                 db.commit()
                 return
@@ -107,8 +116,10 @@ def generate_ai_cover_for_story(story_id: int):
         story.cover_image_url = f"/static/covers/{filename}"
         story.cover_status = "ready"
         db.commit()
+        logger.info("cover generation ready story_id=%s file=%s", story_id, filename)
 
-    except Exception:
+    except Exception as exc:
+        logger.exception("cover generation failed story_id=%s error=%s", story_id, exc)
         try:
             story = db.query(Story).filter(Story.id == story_id).first()
             if story:
@@ -127,6 +138,7 @@ def finalize_story_assets(story_id: int):
         if not story:
             return
 
+        logger.info("finalize_story_assets start story_id=%s", story_id)
         try:
             _sync_story_context(story)
             db.commit()
@@ -150,6 +162,7 @@ def finalize_story_assets(story_id: int):
             db.rollback()
 
         generate_ai_cover_for_story(story_id)
+        logger.info("finalize_story_assets finish story_id=%s", story_id)
 
     finally:
         db.close()

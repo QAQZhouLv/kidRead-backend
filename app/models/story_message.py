@@ -30,5 +30,7 @@ class StoryMessage(Base):
     choices_json = Column(Text, nullable=True)
 
     should_save = Column(Boolean, default=False)
+    save_mode = Column(String(50), nullable=True, default="append")
+    raw_response = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

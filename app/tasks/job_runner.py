@@ -83,7 +83,7 @@ def _handle_sync_story_vectors(_: Session, payload: dict[str, Any]) -> None:
     # local import to avoid: runtime -> job_runner -> story_vector_sync_service -> runtime
     from app.services.story_vector_sync_service import sync_story_vectors_task
 
-    sync_story_vectors_task(int(story_id))
+    sync_story_vectors_task(int(story_id), task_id=payload.get("task_id"))
 
 
 def _handle_delete_story_vectors(_: Session, payload: dict[str, Any]) -> None:
@@ -92,7 +92,7 @@ def _handle_delete_story_vectors(_: Session, payload: dict[str, Any]) -> None:
         return
     from app.services.story_vector_sync_service import delete_story_vectors_task
 
-    delete_story_vectors_task(int(story_id))
+    delete_story_vectors_task(int(story_id), task_id=payload.get("task_id"))
 
 
 def handle_job(db: Session, job_name: str, payload: dict[str, Any]) -> None:

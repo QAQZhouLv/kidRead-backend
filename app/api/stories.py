@@ -20,6 +20,7 @@ from app.services.story_vector_sync_service import (
     delete_story_vectors_task,
     sync_story_vectors_task,
 )
+from app.services.task_status_service import create_task_record
 from app.tasks.job_names import (
     DELETE_STORY_VECTORS,
     FINALIZE_STORY_ASSETS,
@@ -53,8 +54,16 @@ def story_to_dict(story: Story):
         "age": story.age,
         "summary": story.summary,
         "content": story.content,
+        "story_spec": story.story_spec,
+        "story_state": story.story_state,
+        "story_summary": story.story_summary,
+        "target_age": story.target_age,
+        "difficulty_level": story.difficulty_level,
+        "safety_status": story.safety_status,
+        "safety_tags": story.safety_tags,
         "cover_image_url": story.cover_image_url,
         "fallback_cover_url": story.fallback_cover_url,
+        "display_cover_url": story.cover_image_url or story.fallback_cover_url,
         "cover_status": story.cover_status,
         "cover_prompt": story.cover_prompt,
         "title_source": story.title_source,
@@ -80,10 +89,16 @@ def _build_vector_payload(story: Story) -> dict:
     }
 
 
-def _enqueue_story_side_effects(runtime, story: Story) -> None:
-    payload = {"story_id": story.id}
-    runtime.task_queue.enqueue(FINALIZE_STORY_ASSETS, payload)
-    runtime.task_queue.enqueue(SYNC_STORY_VECTORS, _build_vector_payload(story))
+def _enqueue_story_side_effects(db: Session, runtime, story: Story) -> None:
+    runtime.task_queue.enqueue(FINALIZE_STORY_ASSETS, {"story_id": story.id})
+    vector_task_id = create_task_record(
+        db,
+        task_type=SYNC_STORY_VECTORS,
+        target_type="story",
+        target_id=story.id,
+        payload=_build_vector_payload(story),
+    )
+    runtime.task_queue.enqueue(SYNC_STORY_VECTORS, {**_build_vector_payload(story), "task_id": vector_task_id})
 
 
 def _background_story_side_effects(background_tasks: BackgroundTasks, story: Story) -> None:
@@ -91,8 +106,15 @@ def _background_story_side_effects(background_tasks: BackgroundTasks, story: Sto
     background_tasks.add_task(sync_story_vectors_task, story.id)
 
 
-def _enqueue_story_delete_side_effects(runtime, story_id: int) -> None:
-    runtime.task_queue.enqueue(DELETE_STORY_VECTORS, {"story_id": story_id})
+def _enqueue_story_delete_side_effects(db: Session, runtime, story_id: int) -> None:
+    task_id = create_task_record(
+        db,
+        task_type=DELETE_STORY_VECTORS,
+        target_type="story",
+        target_id=story_id,
+        payload={"story_id": story_id},
+    )
+    runtime.task_queue.enqueue(DELETE_STORY_VECTORS, {"story_id": story_id, "task_id": task_id})
 
 
 def _background_story_delete_side_effects(background_tasks: BackgroundTasks, story_id: int) -> None:
@@ -146,7 +168,7 @@ def create_story_api(
     runtime = build_runtime(db)
 
     if runtime.flags.use_async_side_effects:
-        _enqueue_story_side_effects(runtime, story)
+        _enqueue_story_side_effects(db, runtime, story)
     else:
         _background_story_side_effects(background_tasks, story)
 
@@ -175,7 +197,7 @@ def append_story_api(
 
     runtime = build_runtime(db)
     if runtime.flags.use_async_side_effects:
-        _enqueue_story_side_effects(runtime, story)
+        _enqueue_story_side_effects(db, runtime, story)
     else:
         _background_story_side_effects(background_tasks, story)
 
@@ -266,7 +288,7 @@ def soft_delete_story(
 
     runtime = build_runtime(db)
     if runtime.flags.use_async_side_effects:
-        _enqueue_story_delete_side_effects(runtime, story_id)
+        _enqueue_story_delete_side_effects(db, runtime, story_id)
     else:
         _background_story_delete_side_effects(background_tasks, story_id)
 
