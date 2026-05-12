@@ -28,10 +28,13 @@ def _request_embeddings(inputs: list[str]) -> list[list[float]]:
         "input": inputs,
     }
 
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except Exception:
+        return []
 
     items = data.get("data") or []
     vectors: list[list[float]] = []

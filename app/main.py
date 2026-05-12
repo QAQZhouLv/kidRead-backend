@@ -14,6 +14,7 @@ from app.api.openings import router as openings_router
 from app.api.sessions import router as sessions_router
 from app.api.stories import router as stories_router
 from app.api.tts import router as tts_router
+from app.api.debug import router as debug_router
 from app.core.config import APP_NAME
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
@@ -21,6 +22,8 @@ from app.models.opening_topic import OpeningTopic
 from app.models.story import Story
 from app.models.story_message import StoryMessage
 from app.models.story_session import StorySession
+from app.models.story_chunk import StoryChunk
+from app.models.task_record import TaskRecord
 from app.models.user import User
 
 Base.metadata.create_all(bind=engine)
@@ -57,7 +60,7 @@ def seed_opening_topics():
             "公主与骑士", "勇敢小狐狸", "节日惊喜", "龙与宝藏", "晚安星球"
         ]
         for idx, name in enumerate(default_topics):
-            db.add(OpeningTopic(name=name, category="story_theme", sort_order=idx))
+            db.add(OpeningTopic(name=name, category="story_theme", sort_order=idx, enabled=True))
         db.commit()
     finally:
         db.close()
@@ -88,3 +91,5 @@ app.include_router(chat_stream_router)
 app.include_router(tts_router)
 app.include_router(openings_router)
 app.include_router(app_config_router)
+
+app.include_router(debug_router)

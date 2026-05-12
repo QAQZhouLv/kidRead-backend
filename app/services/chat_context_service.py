@@ -29,6 +29,9 @@ def build_context_snapshot(req: ChatRequest) -> dict:
         "full_story_length": summary.get("_full_content_length", 0) if isinstance(summary, dict) else 0,
         "selected_story_length": summary.get("_selected_content_length", len(req.current_story_content or "")) if isinstance(summary, dict) else len(req.current_story_content or ""),
         "context_hit_count": summary.get("_hit_count", 0) if isinstance(summary, dict) else 0,
+        "retrieval_mode": summary.get("_retrieval_mode", "full") if isinstance(summary, dict) else "full",
+        "retrieved_chunk_count": summary.get("_retrieved_chunk_count", summary.get("_hit_count", 0)) if isinstance(summary, dict) else 0,
+        "retrieved_chunks_preview": summary.get("_retrieved_chunks_preview", []) if isinstance(summary, dict) else [],
         "vector_retrieval_enabled": bool(summary.get("_context_mode") == "fast") if isinstance(summary, dict) else False,
     }
 

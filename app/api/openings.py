@@ -32,7 +32,7 @@ def get_db():
 
 @router.get("/create")
 def get_create_opening(db: Session = Depends(get_db)):
-    rows = db.query(OpeningTopic).order_by(OpeningTopic.sort_order.asc(), OpeningTopic.id.asc()).all()
+    rows = db.query(OpeningTopic).filter(OpeningTopic.enabled == True).order_by(OpeningTopic.sort_order.asc(), OpeningTopic.id.asc()).all()
     topics = [r.name for r in rows]
     sample = random.sample(topics, k=min(3, len(topics))) if topics else ["森林冒险", "星空旅行", "海底秘密"]
 

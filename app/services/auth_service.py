@@ -85,6 +85,8 @@ def upsert_user(
     nickname: str | None = None,
     avatar_url: str | None = None,
     display_name: str | None = None,
+    age: int | None = None,
+    theme_preference: str | None = None,
     auth_mode: str = "dev",
 ) -> User:
     user = db.query(User).filter(User.wx_openid == openid).first()
@@ -97,6 +99,8 @@ def upsert_user(
             nickname=(nickname or "").strip() or None,
             avatar_url=(avatar_url or "").strip() or None,
             display_name=(display_name or nickname or "").strip() or None,
+            age=age,
+            theme_preference=(theme_preference or "").strip() or None,
             is_demo_user=(auth_mode == "dev") or openid.startswith("dev_"),
             last_login_at=now,
         )
@@ -115,6 +119,10 @@ def upsert_user(
         user.display_name = display_name.strip()
     elif nickname and not user.display_name:
         user.display_name = nickname.strip()
+    if age is not None:
+        user.age = age
+    if theme_preference:
+        user.theme_preference = theme_preference.strip()
 
     user.is_demo_user = (auth_mode == "dev") or openid.startswith("dev_")
     user.last_login_at = now
@@ -136,6 +144,8 @@ def build_login_response(user: User, auth_mode: str) -> dict:
             "nickname": user.nickname,
             "display_name": user.display_name,
             "avatar_url": user.avatar_url,
+            "age": user.age,
+            "theme_preference": user.theme_preference,
             "is_demo_user": bool(user.is_demo_user),
         },
     }

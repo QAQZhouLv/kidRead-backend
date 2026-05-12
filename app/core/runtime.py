@@ -8,10 +8,9 @@ from app.cache.base import CacheBackend
 from app.cache.noop_cache import NoopCache
 from app.cache.redis_cache import RedisCache
 from app.core.config import (
-    MILVUS_COLLECTION,
-    MILVUS_CONTENT_FIELD,
-    MILVUS_TOKEN,
-    MILVUS_URI,
+    QDRANT_API_KEY,
+    QDRANT_COLLECTION,
+    QDRANT_URL,
     REDIS_QUEUE_NAME,
     REDIS_URL,
     VECTOR_BACKEND,
@@ -23,13 +22,13 @@ from app.repositories.sqlalchemy_message_repository import SQLAlchemyMessageRepo
 from app.repositories.sqlalchemy_session_repository import SQLAlchemySessionRepository
 from app.repositories.sqlalchemy_story_repository import SQLAlchemyStoryRepository
 from app.repositories.story_repository import StoryRepository
-from app.services.embedding_service import embed_query
+from app.services.embedding_service import embed_query, embed_texts
 from app.tasks.base import TaskQueue
 from app.tasks.inline_queue import InlineQueue
 from app.tasks.redis_queue import RedisQueue
 from app.vectorstore.base import StoryVectorStore
-from app.vectorstore.milvus_vector_store import MilvusVectorStore
 from app.vectorstore.noop_vector_store import NoopVectorStore
+from app.vectorstore.qdrant_vector_store import QdrantVectorStore
 from app.vectorstore.simple_text_vector_store import SimpleTextVectorStore
 
 
@@ -45,7 +44,7 @@ class AppRuntime:
 
 
 def _build_cache(flags: FeatureFlags) -> CacheBackend:
-    if flags.use_pg_redis_backends and REDIS_URL:
+    if flags.enable_redis and REDIS_URL:
         try:
             return RedisCache(REDIS_URL)
         except Exception:
@@ -54,11 +53,9 @@ def _build_cache(flags: FeatureFlags) -> CacheBackend:
 
 
 def _build_task_queue(flags: FeatureFlags, db: Session) -> TaskQueue:
-    # IMPORTANT: local import to avoid circular import:
-    # runtime -> job_runner -> runtime
     from app.tasks.job_runner import build_inline_handlers
 
-    if flags.use_async_side_effects and flags.use_pg_redis_backends and REDIS_URL:
+    if flags.use_async_side_effects and flags.enable_redis and REDIS_URL:
         try:
             return RedisQueue(REDIS_URL, queue_name=REDIS_QUEUE_NAME)
         except Exception:
@@ -67,23 +64,23 @@ def _build_task_queue(flags: FeatureFlags, db: Session) -> TaskQueue:
 
 
 def _build_vector_store(flags: FeatureFlags) -> StoryVectorStore:
-    if not flags.use_vector_retrieval:
+    if not flags.enable_rag:
         return NoopVectorStore()
-
-    backend = (VECTOR_BACKEND or "simple").strip().lower()
-    if backend in ("", "simple", "lexical"):
-        return SimpleTextVectorStore()
-    if backend == "milvus":
+    backend = (VECTOR_BACKEND or "qdrant").strip().lower()
+    if backend in ("qdrant", "qdrant-cloud") and flags.enable_qdrant:
         try:
-            return MilvusVectorStore(
-                uri=MILVUS_URI,
-                token=MILVUS_TOKEN,
-                collection_name=MILVUS_COLLECTION,
-                content_field=MILVUS_CONTENT_FIELD,
+            return QdrantVectorStore(
+                url=QDRANT_URL,
+                api_key=QDRANT_API_KEY,
+                collection_name=QDRANT_COLLECTION,
                 embed_query_fn=embed_query,
+                embed_texts_fn=embed_texts,
             )
         except Exception:
+            # Keep the main story flow usable even when Qdrant is not running.
             return NoopVectorStore()
+    if backend in ("simple", "lexical"):
+        return SimpleTextVectorStore()
     return NoopVectorStore()
 
 

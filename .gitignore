@@ -2,25 +2,35 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
-# 虚拟环境
+# Virtual environments
 .venv/
-.env
+venv/
 
-# 数据库
+# Secrets and local runtime
+.env
+.env.*
+!.env.example
 *.db
+*.sqlite
+kidread*.db
+
+# Generated media
+static/tts/*
+!static/tts/.gitkeep
+static/covers/*
+!static/covers/.gitkeep
+static/tts_meta/*
+!static/tts_meta/.gitkeep
 
 # IDE
 .vscode/
 .idea/
 
-# TTS file
-static/
+# OS
+.DS_Store
+Thumbs.db
 
-#脚本文件
-migrate_20260401.py
-backfill_story_covers.py
-migrate_20260402_soft_delete.py
-migrate_story_context_20260410.py
-migrate_user_isolation_20260413.py
-migrate_legacy_shared_pool_to_current_user.py
+# migrate
+/*.py

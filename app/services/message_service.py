@@ -37,6 +37,8 @@ def create_assistant_message(db: Session, data: StoryMessageCreateAssistant, *, 
         guide_text=data.guide_text,
         choices_json=json.dumps(data.choices, ensure_ascii=False),
         should_save=data.should_save,
+        save_mode=getattr(data, "save_mode", "append"),
+        raw_response=getattr(data, "raw_response", None),
     )
     db.add(msg)
     db.commit()
