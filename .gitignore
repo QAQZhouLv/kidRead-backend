@@ -28,6 +28,14 @@ static/tts_meta/*
 .vscode/
 .idea/
 
+# Generated media
+static/tts/*
+!static/tts/.gitkeep
+static/covers/*
+!static/covers/.gitkeep
+static/tts_meta/*
+!static/tts_meta/.gitkeep
+
 # OS
 .DS_Store
 Thumbs.db
